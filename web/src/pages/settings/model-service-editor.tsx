@@ -9,10 +9,21 @@ import { fetchPluginProviderCatalog } from "@/services/api/plugin-catalog";
 import { mergeFetchedChannelModelProfiles, type ChannelModelCatalogItem } from "@/lib/channel-model-catalog";
 import { CAPABILITY_LABELS, MODEL_SERVICE_PRESETS, modelCatalogRequestURL, serviceConnectionError, serviceModelProfile, servicePresetFor, type ModelServicePresetId } from "@/lib/model-service-presets";
 import type { ModelProtocolDefinition } from "@/lib/model-protocols";
-import { createModelChannel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { createModelChannel, type MediaHostingOverride, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ChannelModelSettings } from "./channel-model-settings";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores/use-model-connection-tests";
 import "./model-service-editor.css";
+
+/**
+ * 切换渠道图床覆盖模式。
+ *
+ * `inherit` 表示跟随全局，保存时清掉整个覆盖字段，避免留下空对象改变配置语义。
+ */
+function mediaHostingOverride(mode: string, current?: MediaHostingOverride): MediaHostingOverride | undefined {
+    if (mode === "inherit") return undefined;
+    if (mode === "off") return { mode: "off" };
+    return { mode: "custom", provider: current?.provider, endpoint: current?.endpoint };
+}
 
 export function ModelServiceEditor({ initial, onClose, onSave }: { initial?: ModelChannel; onClose: () => void; onSave: (channel: ModelChannel) => Promise<void> }) {
     const [draft, setDraft] = useState<ModelChannel>(() => initial ? structuredClone(initial) : { ...createModelChannel(), name: "", baseUrl: "" });
@@ -168,6 +179,51 @@ export function ModelServiceEditor({ initial, onClose, onSave }: { initial?: Mod
                         <Form.Item label="素材服务地址（可选）" help="仅在服务商使用独立素材域名时填写。留空时只接受同域素材。"><Input aria-label="素材服务地址" inputMode="url" placeholder="https://assets.example.com" value={draft.referenceAssetOrigin || ""} onChange={(event) => patch({ referenceAssetOrigin: event.target.value })} /></Form.Item>
                         <Form.Item label="目录接口格式"><Select aria-label="目录接口格式" value={draft.apiFormat} options={[{ value: "openai", label: "OpenAI 兼容" }, { value: "gemini", label: "Gemini 原生" }]} onChange={(apiFormat) => patch({ apiFormat })} /></Form.Item>
                         <Form.Item label="Secret Key（按需填写）"><Input.Password aria-label="Secret Key" autoComplete="new-password" value={draft.secretKey} onChange={(event) => patch({ secretKey: event.target.value })} /></Form.Item>
+                        <Form.Item
+                            label="素材图床"
+                            help="默认跟随全局设置。个别服务商需要不同图床，或需要单独关闭托管时在此覆盖。"
+                        >
+                            <Segmented
+                                aria-label="素材图床"
+                                value={draft.mediaHosting?.mode || "inherit"}
+                                onChange={(value) => patch({ mediaHosting: mediaHostingOverride(String(value), draft.mediaHosting) })}
+                                options={[
+                                    { label: "跟随全局", value: "inherit" },
+                                    { label: "关闭", value: "off" },
+                                    { label: "单独配置", value: "custom" },
+                                ]}
+                            />
+                        </Form.Item>
+                        {draft.mediaHosting?.mode === "custom" && (
+                            <>
+                                <Form.Item label="图床类型">
+                                    <Select
+                                        aria-label="渠道图床类型"
+                                        value={draft.mediaHosting.provider || "inherit"}
+                                        onChange={(value) => patch({ mediaHosting: { ...draft.mediaHosting!, provider: value === "inherit" ? undefined : String(value) } })}
+                                        options={[
+                                            { value: "inherit", label: "沿用全局类型" },
+                                            { value: "builtin", label: "内置图床" },
+                                            { value: "free", label: "免费图床" },
+                                            { value: "custom", label: "自定义" },
+                                            { value: "aliyun-oss", label: "阿里云 OSS" },
+                                            { value: "tencent-cos", label: "腾讯云 COS" },
+                                            { value: "cloudflare-r2", label: "Cloudflare R2" },
+                                            { value: "aws-s3", label: "AWS S3" },
+                                        ]}
+                                    />
+                                </Form.Item>
+                                <Form.Item label="上传地址（可选）" help="留空时沿用全局上传地址。">
+                                    <Input
+                                        aria-label="渠道上传地址"
+                                        inputMode="url"
+                                        placeholder="https://example.com/api/upload"
+                                        value={draft.mediaHosting.endpoint || ""}
+                                        onChange={(event) => patch({ mediaHosting: { ...draft.mediaHosting!, endpoint: event.target.value } })}
+                                    />
+                                </Form.Item>
+                            </>
+                        )}
                         <ChannelHeadersEditor value={draft.headers} onChange={(headers) => patch({ headers })} />
                     </div>}
                 </Form>

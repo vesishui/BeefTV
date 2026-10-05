@@ -96,7 +96,7 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 				}
 			}
 		}
-		if err := HydrateMedia(ctx, userID, &input, MediaHydrationPolicyFor(ctx, input)); err != nil {
+		if err := HydrateMedia(ctx, userID, &input, MediaHydrationPolicyForHostedGeneration(ctx, input)); err != nil {
 			return nil, err
 		}
 		if runtime.Config != nil {

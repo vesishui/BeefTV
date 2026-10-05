@@ -172,8 +172,10 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	if service.IsLocalMode() {
 		service.platform = platform.NewLocal(service.repo, coordinator, newPlatformHost(service))
 	} else {
-		service.platform = platform.New(service.repo, coordinator, newPlatformHost(service))
+	service.platform = platform.New(service.repo, coordinator, newPlatformHost(service))
 	}
+	// 素材图床是可选的本地能力；未配置时保持上游行为不变。
+	service.installMediaHosting()
 	service.ensureRouter()
 	return service
 }

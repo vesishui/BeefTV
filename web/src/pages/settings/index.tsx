@@ -1,17 +1,19 @@
 import { App, Button } from "antd";
-import { ArrowLeft, RadioTower } from "lucide-react";
+import { ArrowLeft, CloudUpload, RadioTower } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { ChannelSettingsPane, channelValidationError, focusInvalidChannelField, isChannelReady } from "./channel-settings-pane";
+import { MediaHostingPane } from "./media-hosting-pane";
 import { ModelDefaultGrid } from "./model-default-grid";
 
-type ConfigSectionKey = "channels" | "models";
+type ConfigSectionKey = "channels" | "models" | "mediaHosting";
 
 const configSections: Array<{ key: ConfigSectionKey; label: string; description: string; icon: ReactNode }> = [
     { key: "channels", label: "个人渠道", description: "模型服务与个人工作流", icon: <RadioTower className="size-4" /> },
+    { key: "mediaHosting", label: "素材图床", description: "参考素材的公网地址", icon: <CloudUpload className="size-4" /> },
 ];
 
 export function isConfigSection(value: string | null): value is ConfigSectionKey {
@@ -97,6 +99,11 @@ export default function SettingsPage() {
                 <div className="settings-section">
                             <ModelDefaultGrid config={effectiveConfig} onChange={(key, model) => updateConfig(key, model)} onOpenChannels={customChannelsEnabled ? () => selectSection("channels") : undefined} />
                 </div>
+            </SettingsPane>
+        ),
+        mediaHosting: (
+            <SettingsPane>
+                <MediaHostingPane />
             </SettingsPane>
         ),
     };

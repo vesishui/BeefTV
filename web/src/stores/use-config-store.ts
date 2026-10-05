@@ -344,6 +344,22 @@ export type WorkflowGraphPreview = {
 // 兼容仍在使用旧目录标识的会话恢复和模型选择器。
 export const PUBLIC_MODEL_CATALOG_ID = "managed";
 
+/**
+ * 渠道级素材图床覆盖。
+ *
+ * `mode` 决定该渠道如何使用图床：`inherit` 跟随全局配置，`off` 强制关闭，
+ * `custom` 使用下面的 provider 字段。未设置时等同 `inherit`，保证既有渠道行为不变。
+ */
+export type MediaHostingOverride = {
+    mode: "inherit" | "off" | "custom";
+    provider?: string;
+    endpoint?: string;
+    customFileField?: string;
+    customUrlPath?: string;
+    customAuthHeader?: string;
+    customAuthScheme?: string;
+};
+
 export type ModelChannel = {
     id: string;
     name: string;
@@ -367,6 +383,13 @@ export type ModelChannel = {
     hasApiKey?: boolean;
     hasSecretKey?: boolean;
     concurrencyLimit?: number;
+    /**
+     * 渠道级素材图床覆盖。
+     *
+     * 留空表示跟随全局图床配置；显式设置后，该渠道的参考素材改用这里的图床，
+     * 便于个别中转站使用不同的图床或单独关闭托管。
+     */
+    mediaHosting?: MediaHostingOverride;
     modelProfiles?: Array<{
         model: string;
         displayName?: string;

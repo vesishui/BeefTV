@@ -1,0 +1,74 @@
+/* 素材图床设置面板。只作用于本面板，不覆盖全局 Ant Design 规则。 */
+
+.media-hosting-description {
+    margin: 0 0 16px;
+    color: var(--text-secondary, rgb(0 0 0 / 55%));
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.media-hosting-form {
+    max-width: 560px;
+}
+
+.media-hosting-form .ant-form-item {
+    margin-bottom: 16px;
+}
+
+.media-hosting-hint {
+    margin: 6px 0 0;
+    color: var(--text-secondary, rgb(0 0 0 / 45%));
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.media-hosting-hint.is-error {
+    color: var(--ant-color-error, #ff4d4f);
+}
+
+.media-hosting-notice {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+    color: var(--text-secondary, rgb(0 0 0 / 65%));
+    font-size: 12px;
+    line-height: 1.6;
+    background: var(--fill-quaternary, rgb(0 0 0 / 3%));
+    border-radius: 6px;
+}
+
+.media-hosting-notice svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--ant-color-warning, #faad14);
+}
+
+.media-hosting-test {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.media-hosting-test .ant-select {
+    min-width: 110px;
+}
+
+.media-hosting-badge {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.media-hosting-badge.is-ok {
+    color: var(--ant-color-success, #52c41a);
+}
+
+.media-hosting-badge.is-error {
+    color: var(--ant-color-error, #ff4d4f);
+}
