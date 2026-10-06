@@ -1,0 +1,296 @@
+{
+  "apiVersion": "beeftv.plugin/v2",
+  "id": "feituo-video",
+  "name": "飞拓视频",
+  "version": "1.0.0",
+  "author": "BeefTV Contributors",
+  "description": "飞拓 AI（feituokuajing.com）视频生成协议：自定义提交端点 + jobId 轮询，素材需公网 URL。",
+  "documentation": "# 飞拓视频\n\n飞拓 AI（feituokuajing.com）的视频生成协议插件。飞拓使用自有端点，不是 OpenAI 兼容形状。\n\n## 协议身份\n\n- 插件 ID：`feituo-video`\n- Provider ID：`feituo-video`\n- 能力：`video`\n- 默认 Base URL：`https://feituokuajing.com`\n- 鉴权：Bearer\n\n## 接口\n\n| 阶段 | 方法与路径 |\n| --- | --- |\n| 创建任务 | `POST /api/open/v1/video/generate` |\n| 查询任务 | `GET /api/open/v1/video/status?jobId={taskId}` |\n\n创建返回 `jobId`；查询在 `status` 为 `success` 时从 `videoUrl` 取结果，`submitted` 表示仍在排队或生成中。\n\n## 参数\n\n| 统一字段 | 上游字段 | 说明 |\n| --- | --- | --- |\n| `model` | `model` | 飞拓模型 ID，例如 `seedance2.0`。 |\n| `prompt` | `prompt` | 视频提示词。 |\n| `ratio` | `ratio` | 支持 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9。 |\n| `seconds` | `duration` | 按 5 / 10 / 15 秒归并。 |\n| `resolution` | `resolution` | 默认 720p。 |\n| `images` | `imageUrls` | 参考图公网地址数组。 |\n| `videos` | `videoUrls` | 参考视频公网地址数组，仅部分模型支持。 |\n| `audios` | `audioUrls` | 参考音频公网地址数组，仅部分模型支持。 |\n\n## 素材要求\n\n飞拓要求参考素材是公网可访问的 HTTPS 地址，因此本插件声明 `requiresPublicMediaUrls`，由素材图床在上游请求之前完成上传替换。提示词里可用 `@image1`、`@image2` 引用对应素材。\n\n## 限制\n\n- `seedance2.0` 最多 6 张参考图，`dreamina-seedance-2.0` 与 `xn-seedance-2.0` 最多 9 张。\n- 余额不足返回 402，无效密钥返回 403，错误信息原样透传。\n\n---\n\n# 飞拓视频接口字段\n\n## 协议身份\n\n- 插件 ID：`feituo-video`。\n- Provider ID：`feituo-video`。\n- 能力：`video`。\n- 默认 Base URL：`https://feituokuajing.com`。\n- 鉴权驱动：`bearer`。\n- 创建：`POST /api/open/v1/video/generate`。\n- 查询：`GET /api/open/v1/video/status?jobId={taskId}`。\n- 生命周期：异步任务 + 轮询。\n\n## 配置字段\n\n| 字段 | 类型 | 必填 | 含义 |\n| --- | --- | --- | --- |\n| `apiKey` | secret | 是 | API Key |\n\n## 统一字段映射\n\n| 统一字段 | 类型 | 必填 | 上游映射 | 说明 |\n| --- | --- | --- | --- | --- |\n| `model` | string | 是 | `model` | 飞拓模型 ID。 |\n| `prompt` | string | 是 | `prompt` | 视频提示词。 |\n| `ratio` | string | 否 | `ratio` | 画幅比例。 |\n| `seconds` | integer | 否 | `duration` | 时长秒数。 |\n| `resolution` | string | 否 | `resolution` | 分辨率，默认 720p。 |\n| `images` | media[] | 否 | `imageUrls` | 参考图公网地址数组。 |\n| `videos` | media[] | 否 | `videoUrls` | 参考视频公网地址数组。 |\n| `audios` | media[] | 否 | `audioUrls` | 参考音频公网地址数组。 |\n\n## 上游请求模板\n\n| 上游位置 | 值或转换表达式 |\n| --- | --- |\n| `create.method` | `\"POST\"` |\n| `create.path` | `\"/api/open/v1/video/generate\"` |\n| `create.contentType` | `\"application/json\"` |\n| `create.body.model` | `request.model` |\n| `create.body.prompt` | `request.prompt` |\n| `create.body.ratio` | `coalesce(request.aspectRatio, \"9:16\")` |\n| `create.body.duration` | `coalesce(request.seconds, 10)` |\n| `create.body.resolution` | `coalesce(request.resolution, \"720p\")` |\n| `create.body.imageUrls` | `map(sortByOrder(request.images), media.value)` |\n| `create.body.videoUrls` | `map(sortByOrder(request.videos), media.value)` |\n| `create.body.audioUrls` | `map(sortByOrder(request.audios), media.value)` |\n| `poll.method` | `\"GET\"` |\n| `poll.path` | `\"/api/open/v1/video/status\"` |\n| `poll.query.jobId` | `taskId` |\n\n## 响应映射\n\n| 映射位置 | 上游路径 |\n| --- | --- |\n| `response.taskId` | `jobId` / `data.jobId` / `id` |\n| `response.status` | `status`（success / submitted / failed 归一为统一生命周期） |\n| `response.videos` | `videoUrl` / `video_url` / `data.videoUrl` / `result_url` |\n| `response.message` | `errorMessage` / `error.message` / `message` |\n\n## 兼容边界\n\n飞拓要求参考素材是公网可访问的 HTTPS 地址，`requiresPublicMediaUrls` 为 `true`，由素材图床在上游请求之前完成上传替换。比例白名单为 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9，时长按 5 / 10 / 15 秒归并。`submitted` 表示仍在排队或生成中，不算失败。\n\n<!-- BEEFTV_PLUGIN_MANIFEST_START -->\n## Manifest 完整接口定义\n\n以下 JSON 与插件包内实际 `manifest.json` 逐字段一致，覆盖插件身份、权限、配置、鉴权、参数、校验、创建、Agent、查询、取消、结果下载、响应和 Agent 响应映射。`documentation` 字段的值就是当前完整文档；为避免文档在自身内部无限递归，JSON 中仅用等义占位文本表示正文。\n\n```json\n{\n  \"apiVersion\": \"beeftv.plugin/v2\",\n  \"id\": \"feituo-video\",\n  \"name\": \"飞拓视频\",\n  \"version\": \"1.0.0\",\n  \"author\": \"BeefTV Contributors\",\n  \"description\": \"飞拓 AI（feituokuajing.com）视频生成协议：自定义提交端点 + jobId 轮询，素材需公网 URL。\",\n  \"documentation\": \"<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>\",\n  \"permissions\": [\n    \"generation.run\",\n    \"media.read\"\n  ],\n  \"configuration\": {\n    \"fields\": [\n      {\n        \"name\": \"apiKey\",\n        \"type\": \"secret\",\n        \"label\": \"API Key\",\n        \"required\": true\n      }\n    ]\n  },\n  \"contributes\": {\n    \"providers\": [\n      {\n        \"id\": \"feituo-video\",\n        \"label\": \"飞拓视频\",\n        \"capabilities\": [\n          \"video\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://feituokuajing.com\",\n        \"requiresPublicMediaUrls\": true,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"飞拓模型 ID，例如 seedance2.0。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"视频提示词。\"\n          },\n          {\n            \"name\": \"ratio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"aspect_ratio\",\n            \"description\": \"画幅比例，支持 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9。\"\n          },\n          {\n            \"name\": \"seconds\",\n            \"type\": \"integer\",\n            \"required\": false,\n            \"mapping\": \"duration\",\n            \"description\": \"时长，按 5 / 10 / 15 秒归并。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"imageUrls\",\n            \"description\": \"参考图公网地址数组，按顺序对应提示词里的 @image1、@image2。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"videoUrls\",\n            \"description\": \"参考视频公网地址数组，仅部分模型支持。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"audioUrls\",\n            \"description\": \"参考音频公网地址数组，仅部分模型支持。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/api/open/v1/video/generate\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"model\": {\n              \"$ref\": \"request.model\"\n            },\n            \"prompt\": {\n              \"$ref\": \"request.prompt\"\n            },\n            \"ratio\": {\n              \"$coalesce\": [\n                {\n                  \"$ref\": \"request.aspectRatio\"\n                },\n                \"9:16\"\n              ]\n            },\n            \"duration\": {\n              \"$coalesce\": [\n                {\n                  \"$ref\": \"request.seconds\"\n                },\n                10\n              ]\n            },\n            \"resolution\": {\n              \"$coalesce\": [\n                {\n                  \"$ref\": \"request.resolution\"\n                },\n                \"720p\"\n              ]\n            },\n            \"imageUrls\": {\n              \"$map\": {\n                \"from\": {\n                  \"$sortByOrder\": {\n                    \"$ref\": \"request.images\"\n                  }\n                },\n                \"as\": \"media\",\n                \"in\": {\n                  \"$ref\": \"media.value\"\n                }\n              }\n            },\n            \"videoUrls\": {\n              \"$map\": {\n                \"from\": {\n                  \"$sortByOrder\": {\n                    \"$ref\": \"request.videos\"\n                  }\n                },\n                \"as\": \"media\",\n                \"in\": {\n                  \"$ref\": \"media.value\"\n                }\n              }\n            },\n            \"audioUrls\": {\n              \"$map\": {\n                \"from\": {\n                  \"$sortByOrder\": {\n                    \"$ref\": \"request.audios\"\n                  }\n                },\n                \"as\": \"media\",\n                \"in\": {\n                  \"$ref\": \"media.value\"\n                }\n              }\n            }\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/api/open/v1/video/status\",\n          \"query\": {\n            \"jobId\": {\n              \"$ref\": \"taskId\"\n            }\n          }\n        },\n        \"response\": {\n          \"taskId\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.jobId\"\n              },\n              {\n                \"$ref\": \"response.data.jobId\"\n              },\n              {\n                \"$ref\": \"response.id\"\n              },\n              {\n                \"$ref\": \"taskId\"\n              }\n            ]\n          },\n          \"status\": {\n            \"$switch\": {\n              \"cases\": [\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"success\",\n                        \"succeeded\",\n                        \"completed\",\n                        \"done\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"succeeded\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"failed\",\n                        \"failure\",\n                        \"error\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"failed\"\n                }\n              ],\n              \"default\": \"pending\"\n            }\n          },\n          \"message\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.errorMessage\"\n              },\n              {\n                \"$ref\": \"response.error.message\"\n              },\n              {\n                \"$ref\": \"response.message\"\n              }\n            ]\n          },\n          \"videos\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.videoUrl\"\n              },\n              {\n                \"$ref\": \"response.video_url\"\n              },\n              {\n                \"$ref\": \"response.data.videoUrl\"\n              },\n              {\n                \"$ref\": \"response.result_url\"\n              }\n            ]\n          },\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"message\",\n            \"errorMessage\"\n          ],\n          \"resultEphemeral\": true\n        }\n      }\n    ]\n  }\n}\n```\n<!-- BEEFTV_PLUGIN_MANIFEST_END -->\n",
+  "permissions": [
+    "generation.run",
+    "media.read"
+  ],
+  "configuration": {
+    "fields": [
+      {
+        "name": "apiKey",
+        "type": "secret",
+        "label": "API Key",
+        "required": true
+      }
+    ]
+  },
+  "contributes": {
+    "providers": [
+      {
+        "id": "feituo-video",
+        "label": "飞拓视频",
+        "capabilities": [
+          "video"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://feituokuajing.com",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "飞拓模型 ID，例如 seedance2.0。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "视频提示词。"
+          },
+          {
+            "name": "ratio",
+            "type": "string",
+            "required": false,
+            "mapping": "aspect_ratio",
+            "description": "画幅比例，支持 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9。"
+          },
+          {
+            "name": "seconds",
+            "type": "integer",
+            "required": false,
+            "mapping": "duration",
+            "description": "时长，按 5 / 10 / 15 秒归并。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "imageUrls",
+            "description": "参考图公网地址数组，按顺序对应提示词里的 @image1、@image2。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "videoUrls",
+            "description": "参考视频公网地址数组，仅部分模型支持。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "audioUrls",
+            "description": "参考音频公网地址数组，仅部分模型支持。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/api/open/v1/video/generate",
+          "contentType": "application/json",
+          "body": {
+            "model": {
+              "$ref": "request.model"
+            },
+            "prompt": {
+              "$ref": "request.prompt"
+            },
+            "ratio": {
+              "$coalesce": [
+                {
+                  "$ref": "request.aspectRatio"
+                },
+                "9:16"
+              ]
+            },
+            "duration": {
+              "$coalesce": [
+                {
+                  "$ref": "request.seconds"
+                },
+                10
+              ]
+            },
+            "resolution": {
+              "$coalesce": [
+                {
+                  "$ref": "request.resolution"
+                },
+                "720p"
+              ]
+            },
+            "imageUrls": {
+              "$map": {
+                "from": {
+                  "$sortByOrder": {
+                    "$ref": "request.images"
+                  }
+                },
+                "as": "media",
+                "in": {
+                  "$ref": "media.value"
+                }
+              }
+            },
+            "videoUrls": {
+              "$map": {
+                "from": {
+                  "$sortByOrder": {
+                    "$ref": "request.videos"
+                  }
+                },
+                "as": "media",
+                "in": {
+                  "$ref": "media.value"
+                }
+              }
+            },
+            "audioUrls": {
+              "$map": {
+                "from": {
+                  "$sortByOrder": {
+                    "$ref": "request.audios"
+                  }
+                },
+                "as": "media",
+                "in": {
+                  "$ref": "media.value"
+                }
+              }
+            }
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/api/open/v1/video/status",
+          "query": {
+            "jobId": {
+              "$ref": "taskId"
+            }
+          }
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.jobId"
+              },
+              {
+                "$ref": "response.data.jobId"
+              },
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$switch": {
+              "cases": [
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "success",
+                        "succeeded",
+                        "completed",
+                        "done"
+                      ]
+                    ]
+                  },
+                  "then": "succeeded"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "failed",
+                        "failure",
+                        "error"
+                      ]
+                    ]
+                  },
+                  "then": "failed"
+                }
+              ],
+              "default": "pending"
+            }
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.errorMessage"
+              },
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.message"
+              }
+            ]
+          },
+          "videos": {
+            "$coalesce": [
+              {
+                "$ref": "response.videoUrl"
+              },
+              {
+                "$ref": "response.video_url"
+              },
+              {
+                "$ref": "response.data.videoUrl"
+              },
+              {
+                "$ref": "response.result_url"
+              }
+            ]
+          },
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "messagePaths": [
+            "error.message",
+            "message",
+            "errorMessage"
+          ],
+          "resultEphemeral": true
+        }
+      }
+    ]
+  }
+}
