@@ -7,20 +7,22 @@ import (
 )
 
 const (
-	StateDisconnected   = "disconnected"
-	StatePending        = "pending"
-	StateConnected      = "connected"
-	StateExpired        = "expired"
-	StateCancelled      = "cancelled"
-	StateRejected       = "rejected"
-	StateStoreError     = "store_error"
-	StateCatalogFailed  = "catalog_failed"
-	StateRevoked        = "revoked"
-	BalanceUnknown      = "unknown"
-	BalanceZero         = "zero"
-	BalanceAvailable    = "available"
-	connectionSchema    = 1
-	connectionStoreFile = "beefapi-connection.json"
+	StateDisconnected    = "disconnected"
+	StateConnecting      = "connecting"
+	StateConnectionError = "connection_error"
+	StatePending         = "pending"
+	StateConnected       = "connected"
+	StateExpired         = "expired"
+	StateCancelled       = "cancelled"
+	StateRejected        = "rejected"
+	StateStoreError      = "store_error"
+	StateCatalogFailed   = "catalog_failed"
+	StateRevoked         = "revoked"
+	BalanceUnknown       = "unknown"
+	BalanceZero          = "zero"
+	BalanceAvailable     = "available"
+	connectionSchema     = 1
+	connectionStoreFile  = "beefapi-connection.json"
 )
 
 type Account struct {
@@ -57,12 +59,13 @@ type Credential struct {
 }
 
 type CatalogModel struct {
-	ID                       string
-	DisplayName              string
-	ModelType                string
-	SupportedEndpointTypes   []string
-	VideoCapabilities        json.RawMessage
-	VideoCapabilitiesVersion string
+	ID                       string          `json:"id"`
+	DisplayName              string          `json:"displayName,omitempty"`
+	ModelType                string          `json:"modelType,omitempty"`
+	SupportedEndpointTypes   []string        `json:"supportedEndpointTypes,omitempty"`
+	VideoCapabilities        json.RawMessage `json:"videoCapabilities,omitempty"`
+	VideoCapabilitiesVersion string          `json:"videoCapabilitiesVersion,omitempty"`
+	VideoPricing             json.RawMessage `json:"videoPricing,omitempty"`
 }
 
 type persistedDevice struct {
@@ -75,6 +78,7 @@ type persistedDevice struct {
 }
 
 type persistedState struct {
+	AuthorizationOrigin     string           `json:"authorizationOrigin,omitempty"`
 	SchemaVersion           int              `json:"schemaVersion"`
 	Status                  string           `json:"status"`
 	Device                  *persistedDevice `json:"device,omitempty"`

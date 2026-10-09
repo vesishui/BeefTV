@@ -46,6 +46,7 @@ type catalogPayloadItem struct {
 	MaxImages                *int                     `json:"max_images"`
 	VideoCapabilities        json.RawMessage          `json:"video_capabilities"`
 	VideoCapabilitiesVersion string                   `json:"video_capabilities_version"`
+	VideoPricing             json.RawMessage          `json:"video_pricing"`
 }
 
 type catalogPayloadParameters struct {
@@ -166,6 +167,7 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 			MinImages:         item.MinImages,
 			MaxImages:         item.MaxImages,
 			VideoCapabilities: item.VideoCapabilities,
+			VideoPricing:      item.VideoPricing,
 		}
 		if version := strings.TrimSpace(item.VideoCapabilitiesVersion); version != "" || len(item.VideoCapabilities) > 0 {
 			copied := version

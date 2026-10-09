@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import { apiClient } from "../src/services/api/request";
 import { hydrateProtocolCapabilities } from "../src/services/api/protocol-capabilities";
@@ -7,6 +7,13 @@ import { protocolCapabilityFlags, protocolRequiresStructuredMedia, resetProtocol
 const originalApiRequest = apiClient.request;
 
 beforeEach(() => {
+    resetProtocolCapabilities();
+    apiClient.request = originalApiRequest;
+});
+
+// 必须在每个用例后还原：否则最后一个用例装的 mock 会留给同一次运行的其它测试文件，
+// 让依赖真实 apiClient 的用例（例如原生视频导出）莫名其妙地失败。
+afterEach(() => {
     resetProtocolCapabilities();
     apiClient.request = originalApiRequest;
 });
