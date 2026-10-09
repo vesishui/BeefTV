@@ -49,7 +49,7 @@ func Decrypt(dataDir, value string) (string, error) {
 	if !strings.HasPrefix(value, Prefix) {
 		return "", errors.New("本地密钥密文格式无效")
 	}
-	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(value, Prefix))
+	payload, err := decodePayload(strings.TrimPrefix(value, Prefix))
 	if err != nil {
 		return "", errors.New("本地密钥密文格式无效")
 	}
@@ -74,6 +74,18 @@ func Decrypt(dataDir, value string) (string, error) {
 		return "", errors.New("本地密钥解密失败，请检查工作区密钥")
 	}
 	return string(plain), nil
+}
+
+// decodePayload 同时接受无填充与带填充两种标准 base64。
+//
+// 规范写法是无填充（RawStdEncoding），但外部工具和历史修复脚本写过带填充的
+// 形式。只认一种会让一份内容完好的配置永远读不出来：读取路径退到备份后界面
+// 看起来正常，写入路径却持续失败，用户只能看到「系统处理失败」。
+func decodePayload(encoded string) ([]byte, error) {
+	if payload, err := base64.RawStdEncoding.DecodeString(encoded); err == nil {
+		return payload, nil
+	}
+	return base64.StdEncoding.DecodeString(encoded)
 }
 
 func readKey(path string) ([]byte, error) {

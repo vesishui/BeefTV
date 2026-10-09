@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -82,20 +83,20 @@ func (u *Uploader) Upload(ctx context.Context, config Config, kind MediaKind, fi
 	if cached, ok := u.Cache.Lookup(hash); ok {
 		started := time.Now()
 		if u.URLAlive(ctx, cached.URL) {
-			u.logf("[图床] 命中缓存 %s → %s (存活=true, %dms)", shortHash(hash), cached.URL, time.Since(started).Milliseconds())
+			u.logf("[图床] 命中缓存 %s → %s (存活=true, %dms)", shortHash(hash), safeURLHost(cached.URL), time.Since(started).Milliseconds())
 			return cached.URL, nil
 		}
-		u.logf("[图床] 缓存失效 %s → %s (存活=false)，重新上传", shortHash(hash), cached.URL)
+		u.logf("[图床] 缓存失效 %s → %s (存活=false)，重新上传", shortHash(hash), safeURLHost(cached.URL))
 		_ = u.Cache.Forget(hash)
 	}
 
 	started := time.Now()
 	link, err := u.uploadNew(ctx, normalized, kind, filename, contentType, body)
 	if err != nil {
-		u.logf("[图床] 上传失败 provider=%s kind=%s: %v", normalized.Provider, kind, err)
+		u.logf("[图床] 上传失败 provider=%s kind=%s: %s", normalized.Provider, kind, redactUploadLogText(err.Error()))
 		return "", err
 	}
-	u.logf("[图床] 上传成功 provider=%s kind=%s → %s (%dms)", normalized.Provider, kind, link, time.Since(started).Milliseconds())
+	u.logf("[图床] 上传成功 provider=%s kind=%s → %s (%dms)", normalized.Provider, kind, safeURLHost(link), time.Since(started).Milliseconds())
 	if storeErr := u.Cache.Store(hash, CacheEntry{
 		URL:      link,
 		Provider: string(normalized.Provider),
@@ -108,6 +109,20 @@ func (u *Uploader) Upload(ctx context.Context, config Config, kind MediaKind, fi
 	}
 	return link, nil
 }
+
+func safeURLHost(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Hostname() == "" {
+		return "公网链接"
+	}
+	return parsed.Host
+}
+
+func redactUploadLogText(value string) string {
+	return uploadLogURLPattern.ReplaceAllString(value, "[URL]")
+}
+
+var uploadLogURLPattern = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
 
 // uploadNew performs the provider-specific upload without cache involvement.
 func (u *Uploader) uploadNew(ctx context.Context, normalized Config, kind MediaKind, filename string, contentType string, body []byte) (string, error) {

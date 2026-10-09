@@ -133,6 +133,24 @@ func TestProviderConfigCommittedRevisionOnlyAdvancesAfterValidWrite(t *testing.T
 	}
 }
 
+func TestProviderConfigWriteKeepsPrivateFileModeAfterCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewProviderConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveLocalModelConfig([]byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, LocalProviderConfigFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("committed config mode = %o, want 600", mode)
+	}
+}
+
 func TestProviderConfigSeparateHandlesSharePathMutexAndCAS(t *testing.T) {
 	dir := t.TempDir()
 	first, err := NewProviderConfig(dir)

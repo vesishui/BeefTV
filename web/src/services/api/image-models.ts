@@ -15,30 +15,67 @@ const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "
 
 type GeminiModelPayload = { models?: Array<{ name?: string }> };
 type OpenAIModelRecord = {
-    id?: string;
-    name?: string;
-    display_name?: string;
-    model_type?: string;
-    supported_endpoint_types?: string[];
-    video_capabilities?: unknown;
-    video_capabilities_version?: string;
+	id?: string;
+	name?: string;
+	display_name?: string;
+	model_type?: string;
+	capability?: string;
+	type?: string;
+	supported_endpoint_types?: string[];
+	video_capabilities?: unknown;
+	video_capabilities_version?: string;
 };
-type OpenAIModelPayload = { data?: OpenAIModelRecord[]; error?: { message?: string } };
+type OpenAIModelBucket = Array<string | OpenAIModelRecord>;
+type OpenAIModelPayload = { data?: OpenAIModelRecord[] | Record<string, OpenAIModelBucket>; error?: { message?: string } };
+
+const capabilityBuckets = new Set(["video", "image", "audio", "chat", "other"]);
+
+function modelTypeForBucket(bucket: string) {
+	return bucket === "chat" ? "text" : capabilityBuckets.has(bucket) && bucket !== "other" ? bucket : undefined;
+}
+
+export function parseOpenAIModelCatalogPayload(payload: OpenAIModelPayload): ChannelModelCatalogItem[] {
+	const data = payload.data;
+	const records: OpenAIModelRecord[] = Array.isArray(data)
+		? data
+		: Object.entries(data || {}).flatMap(([bucket, values]) => {
+				const modelType = modelTypeForBucket(bucket);
+				return (Array.isArray(values) ? values : []).map((value) =>
+					typeof value === "string"
+						? { id: value, model_type: modelType }
+						: { ...value, model_type: modelValueModelType(value, modelType) },
+				);
+			});
+	return records
+		.map((model) =>
+			sanitizeChannelModelCatalogItem({
+				id: model.id || model.name,
+				displayName: model.display_name || model.name,
+				modelType: modelValueModelType(model),
+				supportedEndpointTypes: model.supported_endpoint_types,
+				videoCapabilities: model.video_capabilities,
+				videoCapabilitiesVersion: model.video_capabilities_version,
+			}),
+		)
+		.filter((item): item is ChannelModelCatalogItem => Boolean(item));
+}
+
+function modelValueModelType(model: OpenAIModelRecord, fallback?: string) {
+	const value = firstNonEmptyText(model.model_type, model.capability, model.type, fallback);
+	return value === "chat" ? "text" : value;
+}
+
+function firstNonEmptyText(...values: Array<string | undefined>) {
+	for (const value of values) {
+		const text = value?.trim();
+		if (text) return text;
+	}
+	return undefined;
+}
 
 async function fetchOpenAIModelCatalog(config: Pick<ModelChannel, "baseUrl" | "apiKey" | "apiFormat" | "headers" | "credentialRef">) {
     const payload = await createChannelTransport(config, "image").get<OpenAIModelPayload>(buildApiUrl(config.baseUrl, "/models"));
-    return (payload.data || [])
-        .map((model) =>
-            sanitizeChannelModelCatalogItem({
-                id: model.id || model.name,
-                displayName: model.display_name || model.name,
-                modelType: model.model_type,
-                supportedEndpointTypes: model.supported_endpoint_types,
-                videoCapabilities: model.video_capabilities,
-                videoCapabilitiesVersion: model.video_capabilities_version,
-            }),
-        )
-        .filter((item): item is ChannelModelCatalogItem => Boolean(item));
+    return parseOpenAIModelCatalogPayload(payload);
 }
 
 export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {

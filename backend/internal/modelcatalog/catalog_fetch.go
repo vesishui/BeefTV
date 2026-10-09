@@ -21,7 +21,7 @@ func (CatalogUpstreamRejectedError) Error() string {
 }
 
 type catalogPayload struct {
-	Data   []catalogPayloadItem `json:"data"`
+	Data   json.RawMessage      `json:"data"`
 	Models []catalogPayloadItem `json:"models"`
 	Error  *catalogPayloadError `json:"error"`
 	Code   *int                 `json:"code"`
@@ -35,7 +35,9 @@ type catalogPayloadItem struct {
 	ID                       string                   `json:"id"`
 	Name                     string                   `json:"name"`
 	DisplayName              string                   `json:"display_name"`
+	Capability               string                   `json:"capability"`
 	ModelType                string                   `json:"model_type"`
+	Type                     string                   `json:"type"`
 	SupportedEndpointTypes   []string                 `json:"supported_endpoint_types"`
 	DefaultParameters        catalogPayloadParameters `json:"default_parameters"`
 	Options                  catalogPayloadOptions    `json:"options"`
@@ -123,7 +125,13 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 	if payload.Code != nil && *payload.Code != 0 {
 		return nil, CatalogUpstreamRejectedError{}
 	}
-	items := payload.Data
+	items := payload.Models
+	if apiFormat == "openai" {
+		items, err = parseOpenAICatalogData(payload.Data)
+		if err != nil {
+			return nil, CatalogJSONError{Cause: err}
+		}
+	}
 	if apiFormat == "gemini" {
 		items = payload.Models
 	}
@@ -135,10 +143,14 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 			continue
 		}
 		seen[name] = true
+		modelType := firstNonEmptyCatalog(item.ModelType, item.Capability, item.Type)
+		if strings.EqualFold(strings.TrimSpace(modelType), "chat") {
+			modelType = "text"
+		}
 		entry := ChannelModelCatalogItem{
 			ID:                     name,
 			DisplayName:            strings.TrimSpace(item.DisplayName),
-			ModelType:              NormalizeCatalogModelType(item.ModelType),
+			ModelType:              NormalizeCatalogModelType(modelType),
 			SupportedEndpointTypes: NormalizeCatalogEndpointTypes(item.SupportedEndpointTypes),
 			DefaultParameters: ChannelModelCatalogDefaultParameters{
 				AspectRatio:     strings.TrimSpace(item.DefaultParameters.AspectRatio),
@@ -165,6 +177,74 @@ func ParseChannelModelCatalog(data []byte, apiFormat string) ([]ChannelModelCata
 		return catalog[left].ID < catalog[right].ID
 	})
 	return catalog, nil
+}
+
+func firstNonEmptyCatalog(values ...string) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// parseOpenAICatalogData accepts both the standard OpenAI array and providers
+// that group model names by capability (for example OpenVideo's
+// data.video/data.image/data.audio/data.chat response).
+func parseOpenAICatalogData(raw json.RawMessage) ([]catalogPayloadItem, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var items []catalogPayloadItem
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		return items, nil
+	}
+	if !strings.HasPrefix(trimmed, "{") {
+		return nil, nil
+	}
+
+	var buckets map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &buckets); err != nil {
+		return nil, err
+	}
+	items := make([]catalogPayloadItem, 0)
+	for _, bucket := range []struct {
+		name      string
+		modelType string
+	}{
+		{name: "video", modelType: "video"},
+		{name: "image", modelType: "image"},
+		{name: "audio", modelType: "audio"},
+		{name: "chat", modelType: "text"},
+		{name: "other"},
+	} {
+		values, ok := buckets[bucket.name]
+		if !ok || strings.TrimSpace(string(values)) == "null" {
+			continue
+		}
+		var names []string
+		if err := json.Unmarshal(values, &names); err == nil {
+			for _, name := range names {
+				items = append(items, catalogPayloadItem{ID: name, ModelType: bucket.modelType})
+			}
+			continue
+		}
+		var records []catalogPayloadItem
+		if err := json.Unmarshal(values, &records); err != nil {
+			return nil, err
+		}
+		for index := range records {
+			if bucket.modelType != "" {
+				records[index].ModelType = bucket.modelType
+			}
+		}
+		items = append(items, records...)
+	}
+	return items, nil
 }
 
 func CatalogModelIDs(items []ChannelModelCatalogItem) []string {

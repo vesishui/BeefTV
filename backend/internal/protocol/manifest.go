@@ -1031,6 +1031,42 @@ func manifestExpressionValue(expression string, request GenerationRequest, taskI
 // manifestRequestValues is deliberately a small, JSON-shaped view of the
 // platform request. It lets uploaded manifests address media items by index
 // without exposing Go structs or adding provider-specific host code.
+// manifestPromptChunks 把长提示词切成不超过 limit 个字符的文本片段。
+// 服务商（如 SparkCine H3）要求每个 text 项有长度上限，但允许多项按换行
+// 拼接；这里优先在段落/换行边界切分，避免把一句话从中间截断。
+func manifestPromptChunks(prompt string, limit int) []any {
+	if limit <= 0 || len([]rune(prompt)) == 0 {
+		return []any{}
+	}
+	runes := []rune(prompt)
+	chunks := make([]any, 0, (len(runes)/limit)+1)
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			chunks = append(chunks, string(runes))
+			break
+		}
+		cut := limit
+		// 在窗口内回退到最近的换行，其次回退到空格，保证语义边界完整。
+		for index := limit; index > 0; index-- {
+			if runes[index-1] == '\n' {
+				cut = index
+				break
+			}
+		}
+		if cut == limit {
+			for index := limit; index > 0; index-- {
+				if runes[index-1] == ' ' {
+					cut = index
+					break
+				}
+			}
+		}
+		chunks = append(chunks, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	return chunks
+}
+
 func manifestRequestValues(request GenerationRequest) map[string]any {
 	userContent := make([]any, 0)
 	if strings.TrimSpace(request.Prompt) != "" {
@@ -1100,11 +1136,13 @@ func manifestRequestValues(request GenerationRequest) map[string]any {
 	output.GenerateAudio = output.GenerateAudio || request.GenerateAudio
 	output.Watermark = output.Watermark || request.Watermark
 	outputValue, _ := requestAsManifestValue(output)
+	providerOptionsValue, _ := requestAsManifestValue(request.ProviderOptions)
 
-	return map[string]any{
+	values := map[string]any{
 		"capability":      request.Capability,
 		"model":           request.Model,
 		"prompt":          request.Prompt,
+		"promptChunks":    manifestPromptChunks(request.Prompt, 7000),
 		"instructions":    request.Instructions,
 		"messages":        messages,
 		"inputs":          manifestMediaValues(inputs),
@@ -1120,9 +1158,16 @@ func manifestRequestValues(request GenerationRequest) map[string]any {
 		"watermark":       request.Watermark,
 		"operation":       request.Operation,
 		"output":          outputValue,
-		"providerOptions": request.ProviderOptions,
+		"providerOptions": providerOptionsValue,
 		"extra":           request.Extra,
 	}
+	// 部分插件用 request.seconds 读取时长，但协议清单只暴露 duration；这里在
+	// 时长有效时提供 seconds 别名。时长为 0 表示未指定，保持 nil 以便
+	// $coalesce 回落到插件声明的默认值，而不是把 0 发给上游。
+	if request.Duration > 0 {
+		values["seconds"] = request.Duration
+	}
+	return values
 }
 
 func hasSystemMessage(messages []Message) bool {

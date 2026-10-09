@@ -33,6 +33,21 @@ func TestChannelAPIURLForProtocolUsesGeminiDefault(t *testing.T) {
 	}
 }
 
+func TestChannelAPIURLKeepsVendorAbsoluteAPIPath(t *testing.T) {
+	// SparkCine 把视频接口挂在 /api/h3、上传挂在 /api/open：path 已是完整
+	// 绝对前缀，不能再注入默认 /v1，否则请求会打到不存在的路由并返回 HTML 404。
+	tests := []struct{ base, path, want string }{
+		{"https://hi.hi.run", "/api/h3/v2/video_generation", "https://hi.hi.run/api/h3/v2/video_generation"},
+		{"https://hi.hi.run", "/api/open/v1/uploads", "https://hi.hi.run/api/open/v1/uploads"},
+		{"https://hi.hi.run/api/h3", "/v2/video_generation", "https://hi.hi.run/api/h3/v2/video_generation"},
+	}
+	for _, test := range tests {
+		if got := ChannelAPIURL(test.base, test.path); got != test.want {
+			t.Fatalf("ChannelAPIURL(%q, %q) = %q, want %q", test.base, test.path, got, test.want)
+		}
+	}
+}
+
 func TestChannelAPIURLForProtocolUsesAgnesOriginPollPath(t *testing.T) {
 	got := ChannelAPIURLForProtocol("https://apihub.agnes-ai.com/v1", "/agnesapi?video_id=video-1&model_name=agnes-video-2.5", model.ChannelInterfaceAgnesVideo)
 	want := "https://apihub.agnes-ai.com/agnesapi?video_id=video-1&model_name=agnes-video-2.5"

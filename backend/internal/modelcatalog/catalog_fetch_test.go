@@ -25,6 +25,94 @@ func TestParseChannelModelCatalogOpenAIAndGemini(t *testing.T) {
 	}
 }
 
+func TestParseChannelModelCatalogOpenVideoCapabilityBuckets(t *testing.T) {
+	openVideo := []byte(`{
+		"code": 0,
+		"data": {
+			"video": ["480PSeedance2.0", "Seedance2.0", "seedancemini", "测试"],
+			"image": ["krea2"],
+			"audio": ["voice-model"],
+			"chat": ["chat-model"],
+			"other": ["other-model"]
+		},
+		"message": "ok"
+	}`)
+	items, err := ParseChannelModelCatalog(openVideo, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 8 {
+		t.Fatalf("OpenVideo catalog length = %d, items = %#v", len(items), items)
+	}
+	byID := make(map[string]ChannelModelCatalogItem, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for _, id := range []string{"480PSeedance2.0", "Seedance2.0", "seedancemini", "测试"} {
+		if got := byID[id].ModelType; got != "video" {
+			t.Fatalf("OpenVideo model %q type = %q, want video", id, got)
+		}
+	}
+	for id, want := range map[string]string{
+		"krea2":       "image",
+		"voice-model": "audio",
+		"chat-model":  "text",
+		"other-model": "",
+	} {
+		if got := byID[id].ModelType; got != want {
+			t.Fatalf("OpenVideo bucket %q type = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestParseChannelModelCatalogOpenVideoRecordsUseCapabilityField(t *testing.T) {
+	openVideo := []byte(`{
+		"code": 0,
+		"data": {
+			"video": [
+				{"id": "Seedance2.0", "capability": "video"},
+				{"name": "seedancemini", "type": "video"}
+			],
+			"image": [{"id": "krea2"}],
+			"chat": [{"id": "chat-model", "model_type": "chat"}]
+		},
+		"message": "ok"
+	}`)
+	items, err := ParseChannelModelCatalog(openVideo, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]ChannelModelCatalogItem, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for id, want := range map[string]string{
+		"Seedance2.0":  "video",
+		"seedancemini": "video",
+		"krea2":        "image",
+		"chat-model":   "text",
+	} {
+		if got := byID[id].ModelType; got != want {
+			t.Fatalf("OpenVideo 记录 %q type = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestParseChannelModelCatalogNormalizesChatRecordToText(t *testing.T) {
+	items, err := ParseChannelModelCatalog([]byte(`{
+		"code": 0,
+		"data": {
+			"chat": [{"id": "chat-record", "model_type": "chat"}]
+		}
+	}`), "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "chat-record" || items[0].ModelType != "text" {
+		t.Fatalf("chat record = %#v", items)
+	}
+}
+
 func TestParseChannelModelCatalogRejectsInvalidJSONAndUpstreamError(t *testing.T) {
 	if _, err := ParseChannelModelCatalog([]byte("not-json"), "openai"); err == nil {
 		t.Fatal("invalid json accepted")

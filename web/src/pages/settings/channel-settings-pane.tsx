@@ -20,6 +20,7 @@ import { localWorkspaceConfig } from "@/lib/user-session";
 import { getLocalModelConfig } from "@/services/api/workspace";
 import { flushModelConfig, getModelConfigPersistenceState, subscribeModelConfigPersistence, type ModelConfigPersistenceState } from "@/services/model-config-repository";
 import { beefAPIConnectionLabel, cancelBeefAPIConnection, disconnectBeefAPIConnection, getBeefAPIConnection, openBeefAPIWallet, startBeefAPIConnection, type BeefAPIConnectionSummary } from "@/services/api/beefapi-connection";
+import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
 
 type UserChannelConnection = "openai" | "gemini";
 type ChannelSettingsPaneProps = {
@@ -158,9 +159,20 @@ export function ChannelSettingsPane({ onOpenModels, onOpenRunningHub }: ChannelS
             ? latest.channels.map((item) => item.id === channel.id ? channel : item)
             : [...latest.channels, channel];
         updateChannels(channels, latest);
-        await flushModelConfig();
-        const saved = getModelConfigPersistenceState();
-        if (saved.status === "error" || saved.dirty) throw new Error(saved.error || "模型服务尚未保存，请重试");
+        try {
+            await flushModelConfig();
+            const saved = getModelConfigPersistenceState();
+            if (saved.status === "error" || saved.dirty) throw new Error(saved.error || "模型服务尚未保存，请重试");
+        } catch (error) {
+            recordDiagnosticEvent({
+                level: "error",
+                category: "action",
+                code: "MODEL_CONFIG_SAVE_FAILED",
+                message: error instanceof Error ? error.message : "模型服务保存失败",
+                route: "/settings",
+            });
+            throw error;
+        }
         message.success("模型服务已保存，可在创作页选择模型");
     };
 

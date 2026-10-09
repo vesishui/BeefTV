@@ -26,6 +26,14 @@ export type DesktopRuntimeBinding = {
     RuntimeConfig: () => Promise<DesktopRuntimeConfig>;
     SaveOwnedMedia?: (fileName: string, resourceID: string) => Promise<boolean>;
     SaveOwnedArtifact?: (fileName: string, data: string) => Promise<boolean>;
+    /** 流式导出：整个压缩包留在磁盘上，媒体字节不再经过 WebView。 */
+    BeginOwnedArchive?: (fileName: string) => Promise<string>;
+    BeginOwnedArchiveEntry?: (sessionID: string, entryName: string) => Promise<void>;
+    AppendOwnedArchiveChunk?: (sessionID: string, data: string) => Promise<void>;
+    EndOwnedArchiveEntry?: (sessionID: string) => Promise<void>;
+    AppendOwnedArchiveResource?: (sessionID: string, entryName: string, resourceID: string) => Promise<void>;
+    FinishOwnedArchive?: (sessionID: string) => Promise<boolean>;
+    AbortOwnedArchive?: (sessionID: string) => Promise<void>;
     UpdateStatus?: () => Promise<DesktopUpdateState>;
     CheckForUpdate?: () => Promise<DesktopUpdateState>;
     DownloadUpdate?: () => Promise<DesktopUpdateState>;

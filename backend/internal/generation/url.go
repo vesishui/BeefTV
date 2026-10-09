@@ -54,6 +54,11 @@ func apiURLWithDefaultPrefix(baseURL string, path string, defaultPrefix string) 
 		if basePrefix == requestPrefix {
 			return base + strings.TrimPrefix(requestPath, requestPrefix)
 		}
+		// base 已经指向服务商自定义的 /api/<segment> 前缀时，path 里的版本段是
+		// 该前缀下的子路径，不能再拿它去替换 base 前缀。
+		if strings.HasPrefix(basePrefix, "/api/") && !strings.HasPrefix(requestPrefix, "/api/") {
+			return base + requestPath
+		}
 		return strings.TrimSuffix(base, basePrefix) + requestPath
 	}
 	if basePrefix != "" {
@@ -69,6 +74,15 @@ func requestAPIPathPrefix(value string) string {
 			return prefix
 		}
 	}
+	// 服务商可以把整套 API 挂在自定义前缀下（例如 SparkCine 的 /api/h3）。
+	// 这类路径在 path 里已是完整绝对路径，不能再注入默认版本前缀，否则会
+	// 变成 /v1/api/h3/... 而打到不存在的路由。
+	if strings.HasPrefix(lower, "/api/") {
+		segments := strings.SplitN(strings.TrimPrefix(lower, "/api/"), "/", 2)
+		if len(segments) > 0 && segments[0] != "" {
+			return "/api/" + segments[0]
+		}
+	}
 	return ""
 }
 
@@ -77,6 +91,12 @@ func baseAPIPathPrefix(value string) string {
 	for _, prefix := range channelAPIPrefixes {
 		if lower == prefix || strings.HasSuffix(lower, prefix) {
 			return prefix
+		}
+	}
+	if index := strings.Index(lower, "/api/"); index >= 0 {
+		segments := strings.SplitN(lower[index+len("/api/"):], "/", 2)
+		if len(segments) > 0 && segments[0] != "" {
+			return "/api/" + segments[0]
 		}
 	}
 	return ""

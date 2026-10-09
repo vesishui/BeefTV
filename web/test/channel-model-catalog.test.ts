@@ -12,6 +12,7 @@ import { defaultModelCapabilityConfig, pluginWorkflowCapabilityConfig } from "..
 import { ChannelModelSettings } from "../src/pages/settings/channel-model-settings";
 import { applyFetchedChannelModelCatalog } from "../src/pages/settings/channel-settings-pane";
 import { fetchChannelModels } from "../src/services/api/image";
+import { parseOpenAIModelCatalogPayload } from "../src/services/api/image-models";
 import { apiClient } from "../src/services/api/request";
 import { createVideoGenerationTask } from "../src/services/api/video";
 import { createModelChannel, defaultConfig, modelDisplayName, normalizeConfigSnapshot, resolveModelRequestConfig, selectableModelsByCapability, type AiConfig } from "../src/stores/use-config-store";
@@ -66,6 +67,41 @@ function formEntries(body: unknown) {
 }
 
 describe("public channel model catalog", () => {
+    test("parses OpenVideo capability buckets without mixing non-video models", () => {
+        const catalog = parseOpenAIModelCatalogPayload({
+            data: {
+                video: ["480PSeedance2.0", "Seedance2.0", "seedancemini", "测试"],
+                image: ["krea2"],
+                audio: ["voice-model"],
+                chat: ["chat-model"],
+            },
+        });
+
+        expect(catalog.filter((item) => item.modelType === "video").map((item) => item.id)).toEqual([
+            "480PSeedance2.0",
+            "Seedance2.0",
+            "seedancemini",
+            "测试",
+        ]);
+        expect(catalog.find((item) => item.id === "krea2")?.modelType).toBe("image");
+        expect(catalog.find((item) => item.id === "voice-model")?.modelType).toBe("audio");
+        expect(catalog.find((item) => item.id === "chat-model")?.modelType).toBe("text");
+    });
+
+    test("parses OpenVideo record buckets and capability aliases without cross-category leakage", () => {
+        const catalog = parseOpenAIModelCatalogPayload({
+            data: {
+                video: [{ id: "Seedance2.0", capability: "video" }, { name: "seedancemini", type: "video" }],
+                image: [{ id: "krea2" }],
+                chat: [{ id: "chat-model", model_type: "chat" }],
+            },
+        });
+
+        expect(catalog.filter((item) => item.modelType === "video").map((item) => item.id)).toEqual(["Seedance2.0", "seedancemini"]);
+        expect(catalog.find((item) => item.id === "krea2")?.modelType).toBe("image");
+        expect(catalog.find((item) => item.id === "chat-model")?.modelType).toBe("text");
+    });
+
     test("backend catalogue authentication failure keeps its actionable message", async () => {
         apiClient.request = (async () => ({ status: 502, data: { code: 502, data: null, msg: "模型服务鉴权失败，请检查 API Key", reason: "bad_gateway" } })) as typeof apiClient.request;
         await expect(fetchChannelModels(createModelChannel({ apiKey: "synthetic-invalid" }), true)).rejects.toThrow("模型服务鉴权失败，请检查 API Key");

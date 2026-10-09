@@ -1,0 +1,383 @@
+{
+  "apiVersion": "beeftv.plugin/v2",
+  "id": "openvideo-video",
+  "name": "OpenVideo 视频",
+  "version": "1.0.0",
+  "author": "BeefTV Contributors",
+  "description": "OpenVideo /api/v1 异步视频协议：模型列表、视频创建与任务轮询。",
+  "permissions": [
+    "generation.run",
+    "media.read"
+  ],
+  "configuration": {
+    "fields": [
+      {
+        "name": "apiKey",
+        "type": "secret",
+        "label": "API Key",
+        "required": true
+      }
+    ]
+  },
+  "contributes": {
+    "providers": [
+      {
+        "id": "openvideo-video",
+        "label": "OpenVideo 视频",
+        "capabilities": [
+          "video"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://www.openvideo.top/api/v1",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "从 GET /models 返回结果中复制的模型 ID。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "视频提示词。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "images",
+            "description": "参考图片公网 HTTPS 地址数组。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "videos",
+            "description": "参考视频公网 HTTPS 地址数组。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "audios",
+            "description": "参考音频公网 HTTPS 地址数组。"
+          },
+          {
+            "name": "duration",
+            "type": "integer",
+            "required": false,
+            "mapping": "duration",
+            "description": "视频时长（秒）。"
+          },
+          {
+            "name": "aspectRatio",
+            "type": "string",
+            "required": false,
+            "mapping": "ratio",
+            "description": "画幅比例，例如 16:9。"
+          },
+          {
+            "name": "resolution",
+            "type": "string",
+            "required": false,
+            "mapping": "resolution",
+            "description": "分辨率档位，例如 720p。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "通过 providerOptions.openvideo 传入 style_id、team_id 或新增字段。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/videos",
+          "contentType": "application/json",
+          "body": {
+            "$merge": [
+              {
+                "object": "video",
+                "model": {
+                  "$ref": "request.model"
+                },
+                "prompt": {
+                  "$ref": "request.prompt"
+                },
+                "images": {
+                  "$omitEmpty": {
+                    "$map": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.images"
+                        }
+                      },
+                      "as": "media",
+                      "in": {
+                        "$ref": "media.value"
+                      }
+                    }
+                  }
+                },
+                "videos": {
+                  "$omitEmpty": {
+                    "$map": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.videos"
+                        }
+                      },
+                      "as": "media",
+                      "in": {
+                        "$ref": "media.value"
+                      }
+                    }
+                  }
+                },
+                "audios": {
+                  "$omitEmpty": {
+                    "$map": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.audios"
+                        }
+                      },
+                      "as": "media",
+                      "in": {
+                        "$ref": "media.value"
+                      }
+                    }
+                  }
+                },
+                "duration": {
+                  "$omitEmpty": {
+                    "$if": {
+                      "condition": {
+                        "$gt": [
+                          {
+                            "$ref": "request.duration"
+                          },
+                          0
+                        ]
+                      },
+                      "then": {
+                        "$ref": "request.duration"
+                      },
+                      "else": null
+                    }
+                  }
+                },
+                "ratio": {
+                  "$omitEmpty": {
+                    "$ref": "request.aspectRatio"
+                  }
+                },
+                "resolution": {
+                  "$omitEmpty": {
+                    "$ref": "request.resolution"
+                  }
+                },
+                "style_id": {
+                  "$omitEmpty": {
+                    "$ref": "request.providerOptions.openvideo.style_id"
+                  }
+                },
+                "team_id": {
+                  "$omitEmpty": {
+                    "$ref": "request.providerOptions.openvideo.team_id"
+                  }
+                }
+              },
+              {
+                "$coalesce": [
+                  {
+                    "$ref": "request.providerOptions.openvideo.body"
+                  },
+                  {}
+                ]
+              }
+            ]
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/videos/{{taskId}}"
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "response.data.id"
+              },
+              {
+                "$ref": "response.task_id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$switch": {
+              "cases": [
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.state"
+                              },
+                              {
+                                "$toString": {
+                                  "$ref": "response.status"
+                                }
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "succeeded",
+                        "success",
+                        "completed",
+                        "done",
+                        "2"
+                      ]
+                    ]
+                  },
+                  "then": "succeeded"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.state"
+                              },
+                              {
+                                "$toString": {
+                                  "$ref": "response.status"
+                                }
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "failed",
+                        "failure",
+                        "error",
+                        "3"
+                      ]
+                    ]
+                  },
+                  "then": "failed"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.state"
+                              },
+                              {
+                                "$toString": {
+                                  "$ref": "response.status"
+                                }
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "processing",
+                        "in_progress",
+                        "running",
+                        "1"
+                      ]
+                    ]
+                  },
+                  "then": "processing"
+                }
+              ],
+              "default": "pending"
+            }
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.error"
+              },
+              {
+                "$ref": "response.message"
+              },
+              {
+                "$ref": "response.data.error"
+              }
+            ]
+          },
+          "videos": {
+            "$coalesce": [
+              {
+                "$ref": "response.result_urls"
+              },
+              {
+                "$ref": "response.result_url"
+              },
+              {
+                "$ref": "response.data.result_urls"
+              },
+              {
+                "$ref": "response.data.result_url"
+              }
+            ]
+          },
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "messagePaths": [
+            "error.message",
+            "error",
+            "message"
+          ],
+          "resultEphemeral": true
+        }
+      }
+    ]
+  },
+  "documentation": "# OpenVideo 视频\n\nOpenVideo（`www.openvideo.top`）的 OpenAI 兼容异步视频协议插件。插件只描述\n`/api/v1` 线协议，不修改 BeefTV 的通用生成链路，也不保存 API Key。\n\n## 配置\n\n- 默认 Base URL：`https://www.openvideo.top/api/v1`\n- 鉴权：`Authorization: Bearer <API Key>`\n- 模型：从服务商的 `GET /models` 返回结果中复制 `data[].id`\n- 参考素材：插件声明 `requiresPublicMediaUrls`，图片、音频和视频先经过 BeefTV\n  已有图床和缓存流程，再把 HTTPS URL 放入生成请求\n\n## 请求流程\n\n1. `GET /models` 获取模型列表（免费模型列表检查，不创建任务）。\n2. `POST /videos` 创建异步任务。\n3. `GET /videos/{id}` 轮询 `pending`、`processing`、`succeeded` 或 `failed`。\n\n服务商还提供 `POST /assets/uploads` 方便把本地文件上传为公网 URL；该接口是可选的。\nBeefTV 插件不会绕过现有媒体图床去执行第二套上传流程。\n\n## 参数\n\n| BeefTV 字段 | OpenVideo 字段 | 说明 |\n| --- | --- | --- |\n| `model` | `model` | 从 `/models` 复制的模型 ID |\n| `prompt` | `prompt` | 视频提示词 |\n| 固定值 | `object` | 固定发送 `video` |\n| `images` | `images` | 参考图片 HTTPS URL 数组 |\n| `videos` | `videos` | 参考视频 HTTPS URL 数组 |\n| `audios` | `audios` | 参考音频 HTTPS URL 数组 |\n| `duration` | `duration` | 视频时长（秒） |\n| `aspectRatio` | `ratio` | 例如 `16:9`、`9:16` |\n| `resolution` | `resolution` | 例如 `720p`、`1080p` |\n| `providerOptions.openvideo.style_id` | `style_id` | 可选风格 ID |\n| `providerOptions.openvideo.team_id` | `team_id` | 可选团队 ID |\n\n## 响应\n\n创建响应使用 `id` 作为任务 ID。轮询响应优先读取 `state`，也兼容数值\n`status`（`0` 待处理、`1` 处理中、`2` 成功、`3` 失败）。成功结果读取\n`result_url` 或 `result_urls`，并由 BeefTV 持久化临时 URL。\n\n完整接口字段见 [docs/interface.md](docs/interface.md)。\n\n---\n\n# OpenVideo 视频接口\n\n## 协议身份\n\n- 插件 ID：`openvideo-video`\n- Provider ID：`openvideo-video`\n- 能力：`video`\n- 默认 Base URL：`https://www.openvideo.top/api/v1`\n- 鉴权：Bearer API Key\n- 模型列表：`GET /models`\n- 创建：`POST /videos`\n- 查询：`GET /videos/{id}`\n- 生命周期：异步任务 + 轮询\n\n## 配置字段\n\n| 字段 | 类型 | 必填 | 含义 |\n| --- | --- | --- | --- |\n| `apiKey` | secret | 是 | OpenVideo API Key |\n\n## 统一字段映射\n\n| 统一字段 | 类型 | 必填 | OpenVideo 字段 | 说明 |\n| --- | --- | --- | --- | --- |\n| `model` | string | 是 | `model` | 从 `GET /models` 返回的 `data[].id` |\n| `prompt` | string | 是 | `prompt` | 视频提示词 |\n| `images` | media[] | 否 | `images` | 公网 HTTPS 图片数组 |\n| `videos` | media[] | 否 | `videos` | 公网 HTTPS 视频数组 |\n| `audios` | media[] | 否 | `audios` | 公网 HTTPS 音频数组 |\n| `duration` | integer | 否 | `duration` | 时长秒数 |\n| `aspectRatio` | string | 否 | `ratio` | 画幅比例 |\n| `resolution` | string | 否 | `resolution` | 分辨率档位 |\n| `providerOptions.openvideo.style_id` | string | 否 | `style_id` | 服务商风格 ID |\n| `providerOptions.openvideo.team_id` | string | 否 | `team_id` | 服务商团队 ID |\n\n## 请求模板\n\n| 上游位置 | 值 |\n| --- | --- |\n| `create.method` | `POST` |\n| `create.path` | `/videos` |\n| `create.contentType` | `application/json` |\n| `create.body.object` | 固定值 `video` |\n| `create.body.model` | `request.model` |\n| `create.body.prompt` | `request.prompt` |\n| `create.body.images` | `request.images[].value` |\n| `create.body.videos` | `request.videos[].value` |\n| `create.body.audios` | `request.audios[].value` |\n| `create.body.duration` | `request.duration` |\n| `create.body.ratio` | `request.aspectRatio` |\n| `create.body.resolution` | `request.resolution` |\n| `create.body.style_id` | `request.providerOptions.openvideo.style_id` |\n| `create.body.team_id` | `request.providerOptions.openvideo.team_id` |\n| `poll.method` | `GET` |\n| `poll.path` | `/videos/{{taskId}}` |\n\n## 响应映射\n\n| 映射位置 | 上游路径 |\n| --- | --- |\n| `response.taskId` | `id` / `data.id` |\n| `response.status` | `state` / 数值 `status` |\n| `response.videos` | `result_url` / `result_urls` |\n| `response.message` | `error.message` / `error` |\n\n## 素材上传边界\n\n服务商的 `POST /assets/uploads` 是一个独立的 multipart 便利接口。它不属于创建请求\n的单次声明式模板，不能在 manifest 中表达“上传后再创建”的串行编排；本插件使用\nBeefTV 的 `requiresPublicMediaUrls` 媒体策略，让现有图床缓存负责把本地素材转换为\n公网 HTTPS URL。用户也可以在服务商侧预先上传素材，然后直接填入 URL。\n\n## 未确认的接口假设\n\n- 默认域名使用 `https://www.openvideo.top`；如果实际服务域名不同，在渠道设置中覆盖\n  Base URL，路径仍保持 `/api/v1` 下的相对路径。\n- `/models` 响应支持标准 OpenAI 的 `data[].id`，也支持 OpenVideo 的\n  `data.video`、`data.image`、`data.audio`、`data.chat` 分组；模型列表读取由 BeefTV\n  通用渠道模型探测完成。\n- 创建和轮询响应按文档使用扁平字段；插件额外兼容常见的 `data.id`、`data.result_url`\n  和 `data.result_urls` 包装。\n- 未发送 `team_id` 时由服务商按其个人余额规则处理；插件不会自动填入团队 ID。\n\n<!-- BEEFTV_PLUGIN_MANIFEST_START -->\n## Manifest 完整接口定义\n\n以下 JSON 与插件包内实际 `manifest.json` 逐字段一致，覆盖插件身份、权限、配置、鉴权、参数、校验、创建、Agent、查询、取消、结果下载、响应和 Agent 响应映射。`documentation` 字段的值就是当前完整文档；为避免文档在自身内部无限递归，JSON 中仅用等义占位文本表示正文。\n\n```json\n{\n  \"apiVersion\": \"beeftv.plugin/v2\",\n  \"id\": \"openvideo-video\",\n  \"name\": \"OpenVideo 视频\",\n  \"version\": \"1.0.0\",\n  \"author\": \"BeefTV Contributors\",\n  \"description\": \"OpenVideo /api/v1 异步视频协议：模型列表、视频创建与任务轮询。\",\n  \"permissions\": [\n    \"generation.run\",\n    \"media.read\"\n  ],\n  \"configuration\": {\n    \"fields\": [\n      {\n        \"name\": \"apiKey\",\n        \"type\": \"secret\",\n        \"label\": \"API Key\",\n        \"required\": true\n      }\n    ]\n  },\n  \"contributes\": {\n    \"providers\": [\n      {\n        \"id\": \"openvideo-video\",\n        \"label\": \"OpenVideo 视频\",\n        \"capabilities\": [\n          \"video\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://www.openvideo.top/api/v1\",\n        \"requiresPublicMediaUrls\": true,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"从 GET /models 返回结果中复制的模型 ID。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"视频提示词。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"images\",\n            \"description\": \"参考图片公网 HTTPS 地址数组。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"videos\",\n            \"description\": \"参考视频公网 HTTPS 地址数组。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"audios\",\n            \"description\": \"参考音频公网 HTTPS 地址数组。\"\n          },\n          {\n            \"name\": \"duration\",\n            \"type\": \"integer\",\n            \"required\": false,\n            \"mapping\": \"duration\",\n            \"description\": \"视频时长（秒）。\"\n          },\n          {\n            \"name\": \"aspectRatio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"ratio\",\n            \"description\": \"画幅比例，例如 16:9。\"\n          },\n          {\n            \"name\": \"resolution\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"resolution\",\n            \"description\": \"分辨率档位，例如 720p。\"\n          },\n          {\n            \"name\": \"providerOptions\",\n            \"type\": \"object\",\n            \"required\": false,\n            \"mapping\": \"provider-specific fields\",\n            \"description\": \"通过 providerOptions.openvideo 传入 style_id、team_id 或新增字段。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/videos\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"$merge\": [\n              {\n                \"object\": \"video\",\n                \"model\": {\n                  \"$ref\": \"request.model\"\n                },\n                \"prompt\": {\n                  \"$ref\": \"request.prompt\"\n                },\n                \"images\": {\n                  \"$omitEmpty\": {\n                    \"$map\": {\n                      \"from\": {\n                        \"$sortByOrder\": {\n                          \"$ref\": \"request.images\"\n                        }\n                      },\n                      \"as\": \"media\",\n                      \"in\": {\n                        \"$ref\": \"media.value\"\n                      }\n                    }\n                  }\n                },\n                \"videos\": {\n                  \"$omitEmpty\": {\n                    \"$map\": {\n                      \"from\": {\n                        \"$sortByOrder\": {\n                          \"$ref\": \"request.videos\"\n                        }\n                      },\n                      \"as\": \"media\",\n                      \"in\": {\n                        \"$ref\": \"media.value\"\n                      }\n                    }\n                  }\n                },\n                \"audios\": {\n                  \"$omitEmpty\": {\n                    \"$map\": {\n                      \"from\": {\n                        \"$sortByOrder\": {\n                          \"$ref\": \"request.audios\"\n                        }\n                      },\n                      \"as\": \"media\",\n                      \"in\": {\n                        \"$ref\": \"media.value\"\n                      }\n                    }\n                  }\n                },\n                \"duration\": {\n                  \"$omitEmpty\": {\n                    \"$if\": {\n                      \"condition\": {\n                        \"$gt\": [\n                          {\n                            \"$ref\": \"request.duration\"\n                          },\n                          0\n                        ]\n                      },\n                      \"then\": {\n                        \"$ref\": \"request.duration\"\n                      },\n                      \"else\": null\n                    }\n                  }\n                },\n                \"ratio\": {\n                  \"$omitEmpty\": {\n                    \"$ref\": \"request.aspectRatio\"\n                  }\n                },\n                \"resolution\": {\n                  \"$omitEmpty\": {\n                    \"$ref\": \"request.resolution\"\n                  }\n                },\n                \"style_id\": {\n                  \"$omitEmpty\": {\n                    \"$ref\": \"request.providerOptions.openvideo.style_id\"\n                  }\n                },\n                \"team_id\": {\n                  \"$omitEmpty\": {\n                    \"$ref\": \"request.providerOptions.openvideo.team_id\"\n                  }\n                }\n              },\n              {\n                \"$coalesce\": [\n                  {\n                    \"$ref\": \"request.providerOptions.openvideo.body\"\n                  },\n                  {}\n                ]\n              }\n            ]\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/videos/{{taskId}}\"\n        },\n        \"response\": {\n          \"taskId\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.id\"\n              },\n              {\n                \"$ref\": \"response.data.id\"\n              },\n              {\n                \"$ref\": \"response.task_id\"\n              },\n              {\n                \"$ref\": \"taskId\"\n              }\n            ]\n          },\n          \"status\": {\n            \"$switch\": {\n              \"cases\": [\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.state\"\n                              },\n                              {\n                                \"$toString\": {\n                                  \"$ref\": \"response.status\"\n                                }\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"succeeded\",\n                        \"success\",\n                        \"completed\",\n                        \"done\",\n                        \"2\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"succeeded\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.state\"\n                              },\n                              {\n                                \"$toString\": {\n                                  \"$ref\": \"response.status\"\n                                }\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"failed\",\n                        \"failure\",\n                        \"error\",\n                        \"3\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"failed\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.state\"\n                              },\n                              {\n                                \"$toString\": {\n                                  \"$ref\": \"response.status\"\n                                }\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"processing\",\n                        \"in_progress\",\n                        \"running\",\n                        \"1\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"processing\"\n                }\n              ],\n              \"default\": \"pending\"\n            }\n          },\n          \"message\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.error.message\"\n              },\n              {\n                \"$ref\": \"response.error\"\n              },\n              {\n                \"$ref\": \"response.message\"\n              },\n              {\n                \"$ref\": \"response.data.error\"\n              }\n            ]\n          },\n          \"videos\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.result_urls\"\n              },\n              {\n                \"$ref\": \"response.result_url\"\n              },\n              {\n                \"$ref\": \"response.data.result_urls\"\n              },\n              {\n                \"$ref\": \"response.data.result_url\"\n              }\n            ]\n          },\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"error\",\n            \"message\"\n          ],\n          \"resultEphemeral\": true\n        }\n      }\n    ]\n  },\n  \"documentation\": \"<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>\"\n}\n```\n<!-- BEEFTV_PLUGIN_MANIFEST_END -->\n"
+}

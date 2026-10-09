@@ -20,6 +20,7 @@ const maxSaveFileNameBytes = 180
 // Wails v2 JSON-unmarshals []byte from a base64 string. JS strings are UTF-16,
 // so 32MiB raw is about 43MiB base64 and ~86MiB of string memory plus the
 // original ArrayBuffer and the IPC copy. Larger caps still risk the WebView.
+// Multi-gigabyte canvas archives use the streaming OwnedArchive path instead.
 const maxOwnedArtifactBytes = 32 << 20
 
 func (r *Runtime) CopyOwnedResourceTo(resourceID, destPath string) error {

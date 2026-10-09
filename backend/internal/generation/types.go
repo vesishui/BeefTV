@@ -133,6 +133,14 @@ type MediaHydrationPolicy struct {
 	PreferURL   bool
 	PreferHTTPS bool
 	KeepLocal   bool
+	// CanHydrateLocal means the installed media-hosting provider can turn a
+	// local resource/data URL into a fetchable URL before dispatch. It keeps
+	// admission from showing the manual HTTPS-link dialog prematurely.
+	CanHydrateLocal bool
+	// UploadConfig carries the resolved request credentials to the optional
+	// uploader. It is only kept in memory for the active generation. A pointer
+	// keeps this policy comparable for existing tests and callers.
+	UploadConfig *Config
 }
 
 type ImageResponse struct {

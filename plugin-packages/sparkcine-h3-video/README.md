@@ -42,7 +42,7 @@ SparkCine 用 `content[]` 数组承载多模态输入，而不是扁平的图片
 | 统一字段 | 上游字段 | 说明 |
 | --- | --- | --- |
 | `prompt` | `content[0].text` | 视频提示词。 |
-| `images` | `content[].image_url` | 参考图，首尾帧模式按顺序赋予 `first_frame` / `last_frame`。 |
+| `images` | `content[].image_url` | 参考图默认 `reference_image`；仅当显式声明首尾帧时使用 `first_frame` / `last_frame`（只适用于 h3-video-frames）。 |
 | `audios` | `content[].audio_url` | 参考音频，提示词里可用 `@音频1` 引用。 |
 | `ratio` | `ratio` | 只支持 16:9 与 9:16。 |
 | `seconds` | `duration` | 4-15 秒。 |

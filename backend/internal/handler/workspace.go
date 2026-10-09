@@ -118,6 +118,11 @@ func RegisterWorkspaceRoutes(r *gin.RouterGroup, svc *app.Service) {
 				return
 			}
 			if err != nil {
+				if errors.Is(err, workspace.ErrProviderConfigUnreadable) {
+					// 配置读不出来时必须说清楚原因，不能退回「系统处理失败」。
+					fail(c, http.StatusUnprocessableEntity, err)
+					return
+				}
 				failService(c, err)
 				return
 			}
@@ -125,6 +130,10 @@ func RegisterWorkspaceRoutes(r *gin.RouterGroup, svc *app.Service) {
 			return
 		}
 		if err := providerConfig.SaveLocalModelConfig(envelope.Config); err != nil {
+			if errors.Is(err, workspace.ErrProviderConfigUnreadable) {
+				fail(c, http.StatusUnprocessableEntity, err)
+				return
+			}
 			failService(c, err)
 			return
 		}

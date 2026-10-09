@@ -36,6 +36,7 @@ const DefaultCacheEntries = 2000
 // CacheEntry is one uploaded object.
 type CacheEntry struct {
 	URL       string `json:"url"`
+	AssetID   string `json:"assetId,omitempty"`
 	Provider  string `json:"provider"`
 	Kind      string `json:"kind"`
 	Bytes     int64  `json:"bytes"`

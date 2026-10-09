@@ -1,5 +1,5 @@
 import { confinedArchivePath, createZip, readZip } from "@/lib/zip";
-import { saveOwnedOrBrowserBlob, type OwnedMediaSaveResult } from "@/services/desktop-media-save";
+import { canStreamOwnedArchive, saveOwnedArchiveEntries, saveOwnedOrBrowserBlob, type OwnedArchiveEntry, type OwnedMediaSaveResult } from "@/services/desktop-media-save";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob } from "@/services/image-storage";
 import type { CanvasExportAsset, CanvasExportFile, CanvasProjectExportItem } from "@/types/canvas-export";
@@ -11,6 +11,7 @@ import { isLocalWorkspaceMode } from "@/services/workspace-mode";
 import { archiveFileExtension, assertUniqueArchiveNames, ExportIntegrityError, type MissingExportFile } from "@/lib/export-integrity";
 import { assertUserScope, captureUserScope } from "@/lib/user-scope-guard";
 import { http } from "@/services/api/request";
+import { getResource, resourceIdFromStorageKey } from "@/services/api/resources";
 
 export const ARCHIVE_STORAGE_KEY_PATTERN = /^(image|video|audio|file|resource|model|video-reference|audio-reference):/;
 
@@ -23,12 +24,39 @@ export function isArchiveStorageKey(value: string) {
 export async function exportCanvasProjects(projects: CanvasProject[], fileName = "画布", options: { includeLocalDrawings?: boolean; folders?: CanvasFolder[] } = {}): Promise<OwnedMediaSaveResult> {
     const scope = captureUserScope();
     const zipFiles: { name: string; data: BlobPart }[] = [];
+    const archiveEntries: OwnedArchiveEntry[] = [];
+    // 桌面壳里资源本来就在本机，交给后端按 ID 直接拷进压缩包，
+    // 避免几百 MB 到几 GB 的媒体先下载进 WebView 再原样传回去。
+    const streamResources = canStreamOwnedArchive();
     const missingFiles: MissingExportFile[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {
             const files: CanvasExportAsset[] = [];
             await Promise.all(
                 collectStorageKeys(project).map(async (storageKey) => {
+                    // 只有本机资源库里的文件才登记为后端直拷条目。
+                    const resourceId = streamResources ? resourceIdFromStorageKey(storageKey) : "";
+                    if (resourceId) {
+                        let resource: Awaited<ReturnType<typeof getResource>>;
+                        try {
+                            resource = await getResource(resourceId, { expectedScope: scope });
+                        } catch {
+                            missingFiles.push({ owner: project.title || project.id, reference: `${storageKey}（读取失败）` });
+                            return;
+                        }
+                        if (resource.status !== "ready" || !resource.size) {
+                            missingFiles.push({ owner: project.title || project.id, reference: storageKey });
+                            return;
+                        }
+                        // 只有本机资源才能由后端直接拷入；云端资源仍需走下载路径。
+                        if (resource.provider === "local") {
+                            const mimeType = resource.mimeType || "application/octet-stream";
+                            const path = `projects/${encodeURIComponent(project.id)}/files/${encodeURIComponent(storageKey)}.${archiveFileExtension(mimeType, storageKey.startsWith("image:") ? "png" : "bin")}`;
+                            files.push({ storageKey, path, mimeType, bytes: resource.size });
+                            archiveEntries.push({ name: path, resourceId });
+                            return;
+                        }
+                    }
                     let blob: Blob | null | undefined;
                     try {
                         blob = storageKey.startsWith("image:") ? await getImageBlob(storageKey) : await getMediaBlob(storageKey);
@@ -43,6 +71,7 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
                     const path = `projects/${encodeURIComponent(project.id)}/files/${encodeURIComponent(storageKey)}.${archiveFileExtension(blob.type, storageKey.startsWith("image:") ? "png" : "bin")}`;
                     files.push({ storageKey, path, mimeType: blob.type || "application/octet-stream", bytes: blob.size });
                     zipFiles.push({ name: path, data: blob });
+                    archiveEntries.push({ name: path, data: blob });
                 }),
             );
             const drawingDocuments = (await Promise.all(project.nodes.filter((node) => options.includeLocalDrawings !== false && node.type === "drawing" && node.metadata?.drawingId).map(async (node): Promise<CanvasDrawingExport | null> => {
@@ -58,9 +87,9 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
                     return null;
                 }
                 const previewPath = preview ? `projects/${project.id}/drawings/${safeFileName(drawingId)}.png` : undefined;
-                if (preview && previewPath) zipFiles.push({ name: previewPath, data: preview });
+                if (preview && previewPath) { zipFiles.push({ name: previewPath, data: preview }); archiveEntries.push({ name: previewPath, data: preview }); }
                 const generationRenderPath = render ? `projects/${project.id}/drawings/${safeFileName(drawingId)}.generation.png` : undefined;
-                if (render && generationRenderPath) zipFiles.push({ name: generationRenderPath, data: render.blob });
+                if (render && generationRenderPath) { zipFiles.push({ name: generationRenderPath, data: render.blob }); archiveEntries.push({ name: generationRenderPath, data: render.blob }); }
                 return {
                     drawingId,
                     ...saved,
@@ -70,7 +99,12 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
                         : undefined,
                 } satisfies CanvasDrawingExport;
             }))).filter((item): item is CanvasDrawingExport => item !== null);
-            drawingDocuments.forEach((document) => zipFiles.push({ name: `projects/${project.id}/drawings/${safeFileName(document.drawingId)}.json`, data: JSON.stringify(document) }));
+            drawingDocuments.forEach((document) => {
+                const path = `projects/${project.id}/drawings/${safeFileName(document.drawingId)}.json`;
+                const data = JSON.stringify(document);
+                zipFiles.push({ name: path, data });
+                archiveEntries.push({ name: path, data: new Blob([data], { type: "application/json" }) });
+            });
             return { project: isLocalWorkspaceMode() ? normalizeLocalCanvasProject(project) : project, files, drawingDocuments };
         }),
     );
@@ -91,7 +125,7 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
         assertUserScope(scope);
         if (cover && !cover.size) throw new ExportIntegrityError([{ owner: folder.name, reference: "文件夹封面" }]);
         const coverPath = cover ? `folders/${encodeURIComponent(folder.id)}/cover.${archiveFileExtension(cover.type, "png")}` : undefined;
-        if (cover && coverPath) zipFiles.push({ name: coverPath, data: cover });
+        if (cover && coverPath) { zipFiles.push({ name: coverPath, data: cover }); archiveEntries.push({ name: coverPath, data: cover }); }
         folders.push({ ...folder, coverResourceId: undefined, coverDataUrl: undefined, coverPath, coverMimeType: cover?.type || undefined });
     }
     if (missingFiles.length) throw new ExportIntegrityError(missingFiles);
@@ -106,8 +140,15 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
     }
 
     const data: CanvasExportFile = { app: "infinite-canvas", version: 4, exportedAt: new Date().toISOString(), ...(folders?.length ? { folders } : {}), projects: exportedProjects };
-    const zip = await createZip([{ name: "projects.json", data: JSON.stringify(data, null, 2) }, ...zipFiles]);
+    const manifest = JSON.stringify(data, null, 2);
     assertUserScope(scope);
+    if (streamResources) {
+        return saveOwnedArchiveEntries(`${safeFileName(fileName)}.zip`, [
+            { name: "projects.json", data: new Blob([manifest], { type: "application/json" }) },
+            ...archiveEntries,
+        ]);
+    }
+    const zip = await createZip([{ name: "projects.json", data: manifest }, ...zipFiles]);
     return saveOwnedOrBrowserBlob(`${safeFileName(fileName)}.zip`, zip);
 }
 

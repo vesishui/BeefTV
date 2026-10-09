@@ -16,6 +16,13 @@ type MediaHostingProvider interface {
 	HostingPolicy(ctx context.Context, channelID string, interfaceType string) (mediahost.Decision, error)
 }
 
+// MediaHostingUploader is an optional extension implemented by the app layer.
+// It lets a protocol-owned ingest path run before the configured fallback
+// image host without making generation depend on storage/config details.
+type MediaHostingUploader interface {
+	UploadForGeneration(ctx context.Context, config Config, kind mediahost.MediaKind, filename, contentType string, body []byte) (string, error)
+}
+
 var mediaHostingProvider MediaHostingProvider
 
 // SetMediaHostingProvider installs the media-hosting decision source. The
@@ -40,9 +47,15 @@ func MediaHydrationPolicyForHostedGeneration(ctx context.Context, input Input) M
 		return policy
 	}
 	if decision.UsesBuiltin {
-		return MediaHydrationPolicyWithBuiltinHosting(ctx, input)
+		policy := MediaHydrationPolicyWithBuiltinHosting(ctx, input)
+		config := input.Config
+		policy.UploadConfig = &config
+		return policy
 	}
-	return MediaHydrationPolicyWithHosting(ctx, input)
+	policy = MediaHydrationPolicyWithHosting(ctx, input)
+	config := input.Config
+	policy.UploadConfig = &config
+	return policy
 }
 
 // MediaHydrationPolicyWithHosting layers the media-hosting decision on top of
@@ -70,6 +83,9 @@ func MediaHydrationPolicyWithHosting(ctx context.Context, input Input) MediaHydr
 	// promoting PreferURL to RequireURL is safe here.
 	policy.RequireURL = true
 	policy.PreferURL = true
+	policy.CanHydrateLocal = true
+	config := input.Config
+	policy.UploadConfig = &config
 	return policy
 }
 

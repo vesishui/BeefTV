@@ -33,6 +33,9 @@ var (
 	ErrInvalidProviderIdentity        = errors.New("本地模型配置包含无效或重复的渠道 ID")
 	ErrMalformedProviderConfig        = errors.New("本地模型配置损坏")
 	ErrProviderConfigNotObject        = errors.New("本地模型配置必须是 JSON 对象")
+	// ErrProviderConfigUnreadable 表示磁盘上的配置无法解码。
+	// 读取路径会用备份兜底，写入路径必须明确报错，而不是退回「系统处理失败」。
+	ErrProviderConfigUnreadable = errors.New("本地模型配置无法读取，请修复或重置模型配置后重试")
 )
 
 var providerConfigGuards sync.Map // canonical data dir -> *sync.Mutex
@@ -233,9 +236,6 @@ func (s *ProviderConfig) saveLocalModelConfig(body []byte, existingDocument Prov
 	if err := os.Rename(tmpName, s.path()); err != nil {
 		return fmt.Errorf("替换本地模型配置失败: %w", err)
 	}
-	if err := os.Chmod(s.path(), 0o600); err != nil {
-		return fmt.Errorf("设置本地配置权限失败: %w", err)
-	}
 	if directory, err := os.Open(s.dataDir); err == nil {
 		_ = directory.Sync()
 		_ = directory.Close()
@@ -278,11 +278,11 @@ func (s *ProviderConfig) loadDocument() (ProviderStateDocument, ConfigHealth, er
 	}
 	backup, backupErr := os.ReadFile(s.backupPath())
 	if backupErr != nil {
-		return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("本地模型配置损坏且无可用备份: %w", decodeErr)
+		return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("%w：%w", ErrProviderConfigUnreadable, decodeErr)
 	}
 	document, _, backupDecodeErr := s.decodeStoredDocument(backup)
 	if backupDecodeErr != nil {
-		return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("本地模型配置及备份均损坏: %w", decodeErr)
+		return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("%w：%w", ErrProviderConfigUnreadable, decodeErr)
 	}
 	return document, ConfigHealthRecovered, nil
 }
@@ -296,10 +296,12 @@ func (s *ProviderConfig) loadPrimaryDocument() (ProviderStateDocument, error) {
 		return ProviderStateDocument{}, fmt.Errorf("读取本地模型配置失败: %w", err)
 	}
 	document, _, decodeErr := s.decodeStoredDocument(body)
-	if decodeErr != nil {
-		return ProviderStateDocument{}, fmt.Errorf("本地模型配置损坏: %w", decodeErr)
+	if decodeErr == nil {
+		return document, nil
 	}
-	return document, nil
+	// 写入路径有意不退回备份：损坏的主文件绝不能被静默替换，否则会丢掉仍可
+	// 人工修复的内容。这里只把错误分类出来，让接口能给出可操作的提示。
+	return ProviderStateDocument{}, fmt.Errorf("%w：%w", ErrProviderConfigUnreadable, decodeErr)
 }
 
 func decodeProviderDocument(body []byte) (ProviderStateDocument, bool, error) {

@@ -35,6 +35,27 @@ func TestProviderCatalogOverlaysOfficialRegistry(t *testing.T) {
 	}
 }
 
+func TestProviderCatalogExposesDeclarativeMediaRequirements(t *testing.T) {
+	runtime, err := NewRuntime(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(runtime, nil)
+	catalog := svc.ProviderCatalog(string(protocol.SurfaceCanvas), string(protocol.CapabilityVideo), false)
+	var sparkcine *ProviderCatalogItem
+	for index := range catalog {
+		if catalog[index].ID == "sparkcine-h3-video" {
+			sparkcine = &catalog[index]
+		}
+	}
+	if sparkcine == nil {
+		t.Fatalf("sparkcine provider missing from catalog: %#v", catalog)
+	}
+	if sparkcine.Execution != "declarative" || !sparkcine.RequiresPublicMediaURLs {
+		t.Fatalf("declarative media flags lost for sparkcine: %#v", sparkcine)
+	}
+}
+
 func TestProviderCatalogHidesDisabledPlugins(t *testing.T) {
 	runtime, err := NewRuntime(t.TempDir())
 	if err != nil {

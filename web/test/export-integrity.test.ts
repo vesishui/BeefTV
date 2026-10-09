@@ -21,6 +21,19 @@ mock.module("@/lib/canvas/canvas-drawing-storage", () => ({
 }));
 mock.module("@/services/workspace-mode", () => ({ isLocalWorkspaceMode: () => true }));
 
+// 桌面壳里素材本来就存在本机资源库，导出只需要登记资源 ID；
+// 这里替掉元数据查询，避免测试真的去访问本地后端。
+const resourceFixtures = new Map<string, { status: string; size: number; mimeType: string; provider?: string }>();
+const resourcesModule = await import("@/services/api/resources");
+mock.module("@/services/api/resources", () => ({
+    ...resourcesModule,
+    getResource: async (id: string) => {
+        const fixture = resourceFixtures.get(id);
+        if (!fixture) throw new Error("资源不存在");
+        return { id, ...fixture };
+    },
+}));
+
 const { exportCanvasProjects, openCanvasArchive } = await import("@/lib/canvas/canvas-export");
 const { exportAssets, readAssetPackage } = await import("@/pages/assets/asset-transfer");
 const { createZip, readZip } = await import("@/lib/zip");
@@ -36,6 +49,7 @@ beforeEach(() => {
     restored.clear();
     unreadable.clear();
     drawings.clear();
+    resourceFixtures.clear();
     saved.length = 0;
     acceptSave = true;
     Object.assign(globalThis, {
@@ -285,4 +299,102 @@ test("malformed asset archive fails before writing partial media; duplicate ZIP 
     await expect(readAssetPackage(new File([archive], "broken.zip"))).rejects.toThrow("b.wav");
     expect(restored.size).toBe(0);
     await expect(createZip([{ name: "same", data: "A" }, { name: "same", data: "B" }])).rejects.toThrow("重名文件");
+});
+
+type ArchiveSessionLog = {
+    resources: Array<{ name: string; resourceId: string }>;
+    entries: string[];
+    chunks: Array<{ name: string; base64: string }>;
+    finished: number;
+    aborted: number;
+};
+
+function installArchiveBindings(overrides: { begin?: () => Promise<string>; finish?: () => Promise<boolean> } = {}) {
+    const log: ArchiveSessionLog = { resources: [], entries: [], chunks: [], finished: 0, aborted: 0 };
+    let openEntry = "";
+    Object.assign(globalThis, {
+        window: {
+            location: { protocol: "wails:" },
+            go: {
+                main: {
+                    DesktopApp: {
+                        BeginOwnedArchive: overrides.begin ?? (async () => "session-1"),
+                        BeginOwnedArchiveEntry: async (_session: string, name: string) => { openEntry = name; log.entries.push(name); },
+                        AppendOwnedArchiveChunk: async (_session: string, data: string) => { log.chunks.push({ name: openEntry, base64: data }); },
+                        EndOwnedArchiveEntry: async () => { openEntry = ""; },
+                        AppendOwnedArchiveResource: async (_session: string, name: string, resourceId: string) => { log.resources.push({ name, resourceId }); },
+                        FinishOwnedArchive: async () => {
+                            log.finished += 1;
+                            return overrides.finish ? overrides.finish() : true;
+                        },
+                        AbortOwnedArchive: async () => { log.aborted += 1; },
+                    },
+                },
+            },
+        },
+    });
+    return log;
+}
+
+test("desktop canvas export streams local resources instead of routing bytes through the WebView", async () => {
+    const log = installArchiveBindings();
+    resourceFixtures.set("abc123", { status: "ready", size: 5_000_000, mimeType: "image/png", provider: "local" });
+    resourceFixtures.set("def456", { status: "ready", size: 7, mimeType: "video/mp4", provider: "local" });
+
+    expect(await exportCanvasProjects([project(["resource:abc123", "resource:def456"])])).toBe("saved");
+
+    // 媒体字节由后端按 ID 从磁盘直接拷入，前端一次都没有搬运它们。
+    expect(log.resources.map((item) => item.resourceId).sort()).toEqual(["abc123", "def456"]);
+    expect(log.resources.every((item) => /\.(png|mp4)$/.test(item.name))).toBe(true);
+    // 一次性打包接口完全没有被使用。
+    expect(saved).toHaveLength(0);
+    expect(log.finished).toBe(1);
+    expect(log.aborted).toBe(0);
+
+    // 只有清单走分片通道，且内容与常规导出一致。
+    const manifestChunk = log.chunks.find((chunk) => chunk.name === "projects.json");
+    expect(manifestChunk).toBeDefined();
+    const manifest = JSON.parse(Buffer.from(manifestChunk!.base64, "base64").toString("utf8"));
+    expect(manifest.app).toBe("infinite-canvas");
+    expect(manifest.projects[0].files.map((file: { storageKey: string }) => file.storageKey).sort())
+        .toEqual(["resource:abc123", "resource:def456"]);
+    expect(manifest.projects[0].files.map((file: { bytes: number }) => file.bytes).sort((a: number, b: number) => a - b)).toEqual([7, 5_000_000]);
+});
+
+test("desktop canvas export aborts the archive session when a resource is unusable", async () => {
+    const log = installArchiveBindings();
+    resourceFixtures.set("gone", { status: "deleted", size: 0, mimeType: "image/png", provider: "local" });
+
+    await expect(exportCanvasProjects([project(["resource:gone"])])).rejects.toThrow("resource:gone");
+    // 校验发生在开始保存之前，用户不应看到保存面板，也不应留下临时文件。
+    expect(log.entries).toHaveLength(0);
+    expect(log.finished).toBe(0);
+});
+
+test("a cloud-hosted resource still exports by downloading instead of the local copy path", async () => {
+    const log = installArchiveBindings();
+    resourceFixtures.set("remote9", { status: "ready", size: 4, mimeType: "image/png", provider: "s3" });
+    blobs.set("resource:remote9", new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }));
+
+    expect(await exportCanvasProjects([project(["resource:remote9"])])).toBe("saved");
+
+    // 云端资源不能交给后端直拷，必须回退到下载后再写入压缩包。
+    expect(log.resources).toHaveLength(0);
+    expect(log.entries.some((name) => name.includes(encodeURIComponent("resource:remote9")))).toBe(true);
+});
+
+test("cancelling the native save panel is reported as cancelled, not success", async () => {
+    const log = installArchiveBindings({ begin: async () => "" });
+    let successes = 0;
+    const result = exportCanvasProjects([project([])]);
+    expect(await result).toBe("cancelled");
+    await reportOwnedMediaSave({ error: () => { throw new Error("unexpected error"); }, success: () => { successes += 1; } }, result);
+    expect(successes).toBe(0);
+    expect(log.finished).toBe(0);
+});
+
+test("a failing archive session is aborted so no temp file survives", async () => {
+    const log = installArchiveBindings({ finish: async () => { throw new Error("无法写出压缩包"); } });
+    await expect(exportCanvasProjects([project([])])).rejects.toThrow("无法写出压缩包");
+    expect(log.aborted).toBe(1);
 });

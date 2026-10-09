@@ -14,6 +14,8 @@ type PluginProviderCatalogItem = {
     enabled: boolean;
     unavailableReason?: string;
     baseUrl?: string;
+    execution?: string;
+    requiresPublicMediaUrls?: boolean;
     workflows?: Array<{
         id: string;
         label: string;
@@ -59,6 +61,8 @@ function toProviderDefinition(item: PluginProviderCatalogItem): ModelProtocolDef
         media: `${item.vendor} · ${item.version}`,
         enabled: item.enabled && !item.unavailableReason,
         baseUrl: item.baseUrl,
+        execution: item.execution,
+        requiresPublicMediaUrls: item.requiresPublicMediaUrls,
         workflows: item.workflows || [],
     };
 }

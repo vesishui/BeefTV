@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"infinite-canvas/backend/internal/mediahost"
 )
 
 func HydrateMedia(ctx context.Context, userID string, input *Input, policy MediaHydrationPolicy) error {
@@ -35,6 +37,16 @@ func HydrateOne(ctx context.Context, userID string, media *Media, policy MediaHy
 	}
 	if !strings.HasPrefix(media.StorageKey, "resource:") {
 		if policy.RequireURL && (strings.HasPrefix(strings.TrimSpace(media.DataURL), "data:") || strings.HasPrefix(strings.TrimSpace(media.URL), "data:")) {
+			if policy.CanHydrateLocal {
+				data, mimeType, err := MediaBytes(*media)
+				if err != nil {
+					return fmt.Errorf("读取任务参考素材失败：%w", err)
+				}
+				if err := uploadLocalMedia(ctx, policy, media, data, mimeType); err != nil {
+					return err
+				}
+				return nil
+			}
 			return errors.New("当前渠道暂不支持直接使用本地素材，请使用可访问的 HTTPS 素材链接，或选择支持本地素材的渠道")
 		}
 		return nil
@@ -59,6 +71,23 @@ func HydrateOne(ctx context.Context, userID string, media *Media, policy MediaHy
 		media.DataURL = ""
 		applyResourceMetadata(media, resource)
 		return nil
+	}
+	if policy.CanHydrateLocal {
+		if resource, body, err := runtime.Resources.Open(userID, resourceID); err == nil {
+			defer body.Close()
+			data, readErr := readResourceBytes(ctx, runtime, body)
+			if readErr != nil {
+				return readErr
+			}
+			mimeType := NormalizedMediaMIMEType(firstNonEmpty(media.MimeType, resource.MimeType), data)
+			if uploadErr := uploadLocalMediaWithResource(ctx, policy, media, resource, data, mimeType); uploadErr == nil {
+				return nil
+			} else if policy.RequireURL {
+				return uploadErr
+			}
+		} else if policy.RequireURL {
+			return fmt.Errorf("读取任务参考资源失败：%w", err)
+		}
 	}
 	if policy.PreferHTTPS {
 		if httpsURL, err := runtime.Resources.HTTPSPublicURL(resource, time.Now().Add(ResourceURLTTL)); err == nil {
@@ -115,6 +144,71 @@ func HydrateOne(ctx context.Context, userID string, media *Media, policy MediaHy
 		media.DurationMs = resource.DurationMs
 	}
 	return nil
+}
+
+func readResourceBytes(ctx context.Context, runtime Runtime, body io.Reader) ([]byte, error) {
+	resourceLimit := MaxResponseBytes
+	if runtime.Limits != nil {
+		limit, err := runtime.Limits.ResourceUploadBytes(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resourceLimit = limit
+	}
+	data, err := io.ReadAll(io.LimitReader(body, resourceLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > resourceLimit {
+		return nil, fmt.Errorf("任务参考资源超过 %s", formatStorageLimit(resourceLimit))
+	}
+	return data, nil
+}
+
+func uploadLocalMedia(ctx context.Context, policy MediaHydrationPolicy, media *Media, data []byte, mimeType string) error {
+	resource := ResourceInfo{MimeType: mimeType, Kind: media.Type, Size: int64(len(data))}
+	return uploadLocalMediaWithResource(ctx, policy, media, resource, data, mimeType)
+}
+
+func uploadLocalMediaWithResource(ctx context.Context, policy MediaHydrationPolicy, media *Media, resource ResourceInfo, data []byte, mimeType string) error {
+	uploader, ok := mediaHostingProvider.(MediaHostingUploader)
+	if !ok {
+		return errors.New("当前渠道需要公网素材地址，但素材上传服务未接入")
+	}
+	kind := mediaKindForResource(media, resource, mimeType)
+	filename := strings.TrimSpace(media.Name)
+	if filename == "" {
+		filename = resource.ID
+	}
+	if filename == "" {
+		filename = "beeftv-reference"
+	}
+	if policy.UploadConfig == nil {
+		return errors.New("当前渠道需要公网素材地址，但渠道配置未接入")
+	}
+	link, err := uploader.UploadForGeneration(ctx, *policy.UploadConfig, kind, filename, mimeType, data)
+	if err != nil {
+		return fmt.Errorf("参考素材上传失败：%w", err)
+	}
+	media.URL = link
+	media.DataURL = ""
+	media.StorageKey = ""
+	media.MimeType = mimeType
+	media.Bytes = int64(len(data))
+	applyResourceMetadata(media, resource)
+	return nil
+}
+
+func mediaKindForResource(media *Media, resource ResourceInfo, mimeType string) mediahost.MediaKind {
+	value := strings.ToLower(strings.TrimSpace(firstNonEmpty(mimeType, media.MimeType, resource.MimeType, media.Type, resource.Kind)))
+	switch {
+	case strings.HasPrefix(value, "audio/") || strings.Contains(value, "audio"):
+		return mediahost.MediaKindAudio
+	case strings.HasPrefix(value, "video/") || strings.Contains(value, "video"):
+		return mediahost.MediaKindVideo
+	default:
+		return mediahost.MediaKindImage
+	}
 }
 
 func applyResourceMetadata(media *Media, resource ResourceInfo) {

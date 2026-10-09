@@ -1,10 +1,12 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -150,7 +152,7 @@ func TestDesktopAppBoundMethodsStayTiny(t *testing.T) {
 		names = append(names, typ.Method(i).Name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"CheckForUpdate", "ConfirmUpdateStartup", "DownloadUpdate", "InstallUpdate", "RuntimeConfig", "SaveOwnedArtifact", "SaveOwnedMedia", "UpdateStatus"}) {
+	if !reflect.DeepEqual(names, []string{"AbortOwnedArchive", "AppendOwnedArchiveChunk", "AppendOwnedArchiveResource", "BeginOwnedArchive", "BeginOwnedArchiveEntry", "CheckForUpdate", "ConfirmUpdateStartup", "DownloadUpdate", "EndOwnedArchiveEntry", "FinishOwnedArchive", "InstallUpdate", "RuntimeConfig", "SaveOwnedArtifact", "SaveOwnedMedia", "UpdateStatus"}) {
 		t.Fatalf("bound methods = %v", names)
 	}
 }
@@ -381,6 +383,211 @@ func TestSaveOwnedArtifactCancelLeavesDest(t *testing.T) {
 	got, _ := os.ReadFile(dest)
 	if string(got) != "OLD-ZIP" {
 		t.Fatalf("dest = %q", got)
+	}
+}
+
+func TestStreamedArchiveSessionWritesAndPublishes(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.wailsCtx = context.Background()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID == "" {
+		t.Fatalf("begin = %q err:%v", sessionID, err)
+	}
+	if err := app.BeginOwnedArchiveEntry(sessionID, "projects.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AppendOwnedArchiveChunk(sessionID, []byte(`{"app":"infinite-canvas"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.EndOwnedArchiveEntry(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := app.FinishOwnedArchive(sessionID)
+	if err != nil || !saved {
+		t.Fatalf("finish = saved:%v err:%v", saved, err)
+	}
+	if got := string(readStreamedArchiveEntry(t, dest, "projects.json")); got != `{"app":"infinite-canvas"}` {
+		t.Fatalf("projects.json = %q", got)
+	}
+	assertNoArchiveTempFiles(t, dir)
+	if _, err := app.FinishOwnedArchive(sessionID); err == nil {
+		t.Fatal("a released session must not be finished twice")
+	}
+}
+
+func TestStreamedArchiveCancelLeavesDestinationUntouched(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.wailsCtx = context.Background()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	if err := os.WriteFile(dest, []byte("OLD-ZIP"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.chooseSavePath = func(context.Context, string) (string, error) { return "", nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID != "" {
+		t.Fatalf("cancel = session:%q err:%v", sessionID, err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "OLD-ZIP" {
+		t.Fatalf("dest = %q", got)
+	}
+	assertNoArchiveTempFiles(t, dir)
+}
+
+func TestStreamedArchiveAbortDropsTempFile(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.wailsCtx = context.Background()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID == "" {
+		t.Fatalf("begin = %q err:%v", sessionID, err)
+	}
+	if err := app.BeginOwnedArchiveEntry(sessionID, "projects.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AppendOwnedArchiveChunk(sessionID, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AbortOwnedArchive(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aborted export wrote the destination: %v", err)
+	}
+	assertNoArchiveTempFiles(t, dir)
+	// Aborting twice, or aborting an unknown session, must stay a no-op so the
+	// frontend can always clean up in a deferred path.
+	if err := app.AbortOwnedArchive(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AbortOwnedArchive("missing-session"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStreamedArchiveSessionsAreAbortedOnStop(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.wailsCtx = context.Background()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID == "" {
+		t.Fatalf("begin = %q err:%v", sessionID, err)
+	}
+	if err := app.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertNoArchiveTempFiles(t, dir)
+	if err := app.AppendOwnedArchiveChunk(sessionID, []byte("{}")); err == nil {
+		t.Fatal("a session closed by shutdown must not accept more data")
+	}
+}
+
+// 画布素材本来就在本机资源库里，导出必须由后端直接拷入压缩包，
+// 而不是把字节先搬到 WebView 再传回来。
+func TestStreamedArchiveCopiesStoredResourceBytes(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.startup(context.Background())
+	defer app.shutdown(context.Background())
+	resourceID := uploadDesktopResource(t, app, []byte("hello-media"))
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID == "" {
+		t.Fatalf("begin = %q err:%v", sessionID, err)
+	}
+	if err := app.AppendOwnedArchiveResource(sessionID, "projects/canvas/files/resource:"+resourceID+".bin", resourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.BeginOwnedArchiveEntry(sessionID, "projects.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.AppendOwnedArchiveChunk(sessionID, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.EndOwnedArchiveEntry(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := app.FinishOwnedArchive(sessionID)
+	if err != nil || !saved {
+		t.Fatalf("finish = saved:%v err:%v", saved, err)
+	}
+	body := readStreamedArchiveEntry(t, dest, "projects/canvas/files/resource:"+resourceID+".bin")
+	if string(body) != "hello-media" {
+		t.Fatalf("streamed resource bytes = %q", body)
+	}
+	assertNoArchiveTempFiles(t, dir)
+}
+
+func TestStreamedArchiveRejectsUnknownResource(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.startup(context.Background())
+	defer app.shutdown(context.Background())
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "canvas.zip")
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+
+	sessionID, err := app.BeginOwnedArchive("canvas.zip")
+	if err != nil || sessionID == "" {
+		t.Fatalf("begin = %q err:%v", sessionID, err)
+	}
+	defer app.AbortOwnedArchive(sessionID)
+	if err := app.AppendOwnedArchiveResource(sessionID, "files/unknown.bin", "does-not-exist"); err == nil {
+		t.Fatal("an unknown resource must not be silently skipped")
+	}
+}
+
+func readStreamedArchiveEntry(t *testing.T, path, entryName string) []byte {
+	t.Helper()
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name != entryName {
+			continue
+		}
+		handle, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Close()
+		data, err := io.ReadAll(handle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	t.Fatalf("archive entry %s is missing", entryName)
+	return nil
+}
+
+func assertNoArchiveTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".beeftv-archive-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("leftover archive temp files: %v", matches)
 	}
 }
 

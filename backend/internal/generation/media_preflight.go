@@ -12,7 +12,7 @@ import (
 // ValidateMediaTransport uses the same installed contract as execution, without
 // reading file bytes, uploading anything, or creating a provider task.
 func ValidateMediaTransport(ctx context.Context, input Input) error {
-	policy := MediaHydrationPolicyFor(ctx, input)
+	policy := MediaHydrationPolicyForHostedGeneration(ctx, input)
 	if !policy.RequireURL || policy.KeepLocal {
 		return nil
 	}
@@ -33,9 +33,16 @@ func ValidateMediaTransport(ctx context.Context, input Input) error {
 	for _, group := range groups {
 		for i, media := range group.items {
 			if strings.HasPrefix(media.StorageKey, "resource:") {
+				if policy.CanHydrateLocal {
+					continue
+				}
 				if runtime.Resources != nil && !runtime.Resources.LocalMode() {
 					continue // Hosted resources are resolved by the owned resource port.
 				}
+			} else if policy.CanHydrateLocal &&
+				(strings.HasPrefix(strings.TrimSpace(media.DataURL), "data:") ||
+					strings.HasPrefix(strings.TrimSpace(media.URL), "data:")) {
+				continue
 			} else if address, err := url.Parse(strings.TrimSpace(media.URL)); err == nil && address.Scheme == "https" && address.Hostname() != "" && address.User == nil {
 				continue
 			}

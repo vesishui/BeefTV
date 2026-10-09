@@ -30,6 +30,13 @@ type DesktopApp struct {
 	wailsCtx       context.Context
 	chooseSavePath func(ctx context.Context, fileName string) (string, error)
 	copyOwnedMedia func(resourceID, destPath string) error
+	// openOwnedArchive is the seam tests use to observe streamed exports. It
+	// must stay unexported so Wails never reflects it as a frontend binding.
+	openOwnedArchive func(destPath string) (*bootstrap.OwnedArchive, error)
+	// archiveMu guards the streamed-export sessions. They live outside mu so a
+	// long media copy can never block RuntimeConfig or shutdown.
+	archiveMu       sync.Mutex
+	archiveSessions map[string]*bootstrap.OwnedArchive
 }
 
 // Wails reflects every field type reachable from a bound object. Keeping the
@@ -88,6 +95,9 @@ func (a *DesktopApp) start(ctx context.Context) error {
 }
 
 func (a *DesktopApp) stop(ctx context.Context) error {
+	// A streamed export must never leave a half-written temp file behind once
+	// the app goes away; only Finish replaces the chosen destination file.
+	a.abortArchiveSessions()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	runtime := a.runtime()

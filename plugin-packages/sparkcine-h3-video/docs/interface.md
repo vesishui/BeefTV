@@ -22,7 +22,7 @@
 | 统一字段 | 类型 | 必填 | 上游映射 | 说明 |
 | --- | --- | --- | --- | --- |
 | `prompt` | string | 是 | `content[0].text` | 视频提示词，作为 content 数组第一项。 |
-| `images` | media[] | 否 | `content[].image_url` | 参考图；首尾帧模式赋予 first_frame / last_frame。 |
+| `images` | media[] | 否 | `content[].image_url` | 参考图默认 `reference_image`；仅显式首尾帧时用 first_frame / last_frame（h3-video-frames 专用）。 |
 | `audios` | media[] | 否 | `content[].audio_url` | 参考音频。 |
 | `ratio` | string | 否 | `ratio` | 只支持 16:9 与 9:16。 |
 | `seconds` | integer | 否 | `duration` | 4-15 秒。 |
@@ -166,14 +166,20 @@ SparkCine 按公网 HTTPS 地址抓取素材，data URL 会校验失败，因此
             "model": "MiniMax-H3",
             "content": {
               "$concatArrays": [
-                [
-                  {
-                    "type": "text",
-                    "text": {
-                      "$ref": "request.prompt"
+                {
+                  "$map": {
+                    "from": {
+                      "$ref": "request.promptChunks"
+                    },
+                    "as": "chunk",
+                    "in": {
+                      "type": "text",
+                      "text": {
+                        "$ref": "chunk"
+                      }
                     }
                   }
-                ],
+                },
                 {
                   "$map": {
                     "from": {
@@ -205,13 +211,13 @@ SparkCine 按公网 HTTPS 地址抓取素材，data URL 会校验失败，因此
                               "condition": {
                                 "$eq": [
                                   {
-                                    "$ref": "media.order"
+                                    "$ref": "media.role"
                                   },
-                                  0
+                                  "first_frame"
                                 ]
                               },
                               "then": "first_frame",
-                              "else": null
+                              "else": "reference_image"
                             }
                           }
                         }

@@ -37,5 +37,5 @@ export type LocalModelConfigPayload = {
 };
 
 export function saveLocalModelConfig(config: AiConfig, expectedRevision: number) {
-	return http.put<{ saved: boolean; revision: number }>("/workspace/model-config", { config, expectedRevision });
+	return http.put<{ saved: boolean; revision: number }>("/workspace/model-config", { config, expectedRevision }, { timeout: 30_000 });
 }

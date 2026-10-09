@@ -24,6 +24,10 @@ type ProviderCatalogItem struct {
 	Enabled           bool                        `json:"enabled"`
 	UnavailableReason string                      `json:"unavailableReason,omitempty"`
 	Workflows         []protocol.ManifestWorkflow `json:"workflows,omitempty"`
+	// Execution 与 RequiresPublicMediaURLs 是声明式协议的能力标记：
+	// 前端据此判断该协议需要结构化参考素材，而不是当普通模型只发提示词。
+	Execution               string `json:"execution,omitempty"`
+	RequiresPublicMediaURLs bool   `json:"requiresPublicMediaUrls,omitempty"`
 }
 
 // ProviderCatalog projects provider and workflow contributions from this
@@ -45,10 +49,13 @@ func (s *Service) ProviderCatalog(scope, capability string, includeUnavailable b
 				Workflows: workflowsForProvider(plugin.Manifest.Contributes.Workflows, provider.ID),
 			}
 			item.Create, item.Poll, item.ContentType = operationSummary(provider.Create), operationSummaryPtr(provider.Poll), provider.Create.ContentType
+			item.RequiresPublicMediaURLs = provider.RequiresPublicMediaURLs
 			if registry != nil {
 				if adapter, ok := registry.Resolve(provider.ID); ok {
 					metadata := adapter.Metadata()
 					item.Create, item.Poll, item.ContentType = metadata.Create, metadata.Poll, metadata.ContentType
+					item.Execution = metadata.Execution
+					item.RequiresPublicMediaURLs = item.RequiresPublicMediaURLs || metadata.RequiresPublicMediaURLs
 				}
 			}
 			if includeUnavailable || item.Enabled {

@@ -4,7 +4,7 @@ import { App } from "antd";
 
 import { generationTaskCanReloadResource, generationTaskNodeId } from "@/lib/canvas/canvas-generation-task-sync";
 import { bindBackendCanvasGenerationResult, CanvasGenerationDurableAckError, isCanvasGenerationDurableAckError } from "@/services/canvas-generation-consumer";
-import { captureUserScope, isUserScopeAbandonedError, userScopeMatches } from "@/lib/user-scope-guard";
+import { isUserScopeAbandonedError } from "@/lib/user-scope-guard";
 import { ensureCanvasNodeAsset, retryCanvasAssetSyncAfterRateLimit } from "@/services/project-asset-sync";
 import { listGenerationTasks, queryFailedVideoProviderTask, subscribeGenerationTasks, type GenerationTask } from "@/services/api/task-center";
 import { useTaskDetails } from "@/hooks/use-task-details";
@@ -17,6 +17,8 @@ import { generationFailureMetadata } from "@/lib/generation-error";
 import { canvasTaskFailureMetadata } from "./canvas-generation-failure";
 import { runGenerationConsumer } from "@/services/generation-consumer-lifecycle";
 import { consumeCanvasGenerationContinuation } from "./use-canvas-operation-history";
+import { useCanvasOwnerLifetime } from "./canvas-owner-epoch";
+import { captureCanvasGenerationOwnership } from "./canvas-generation-ownership";
 
 type CanvasGenerationRequest = {
     targetNodeId: string;
@@ -178,6 +180,13 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
     const recoveringTaskIdsRef = useRef(new Set<string>());
     const autoSavedTaskIdsRef = useRef(new Set<string>());
     const consumerControllerRef = useRef(new AbortController());
+    // 画布切换不会重挂载编辑器（/canvas/:id 没有 key），所以「当前画布」必须实时读取。
+    // 只用 consumerControllerRef 判断会漏掉切画布：切换后它已经指向新画布的 controller
+    // （未 abort），于是上一张画布的结果会被当成「当前」写进编辑器状态，
+    // 再被自动保存落到新画布上。这里复用画布归属纪元，同时覆盖同画布重挂载与账号切换。
+    const currentProjectIdRef = useRef(projectId);
+    currentProjectIdRef.current = projectId;
+    const { lifetime: canvasOwnerLifetime } = useCanvasOwnerLifetime(projectId);
     const recoveryCoordinatorRef = useRef<ReturnType<typeof createCanvasGenerationRecoveryCoordinator> | null>(null);
     if (!recoveryCoordinatorRef.current) recoveryCoordinatorRef.current = createCanvasGenerationRecoveryCoordinator();
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
@@ -245,19 +254,34 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
 
     const saveGeneratedAsset = useCallback(
         async (node: CanvasNodeData, taskId: string, signal?: AbortSignal) => {
+            const ownership = captureCanvasGenerationOwnership({
+                canvasId: projectId,
+                lifetime: canvasOwnerLifetime,
+                getLiveCanvasId: () => currentProjectIdRef.current,
+                signal,
+            });
             const result = await retryCanvasAssetSyncAfterRateLimit(() => ensureCanvasNodeAsset({ canvasId: projectId, domainProjectId, node, source: "canvas-generation", taskId, signal }), { signal });
+            // 生成结果已经落到正确的画布，但切画布后不能再写编辑器状态。
+            if (!ownership.isCurrent()) return;
             setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, assetId: result.assetId } } : item)));
             if (domainProjectId) await queryClient.invalidateQueries({ queryKey: ["project", domainProjectId] });
         },
-        [domainProjectId, projectId, queryClient, setNodes],
+        [canvasOwnerLifetime, domainProjectId, projectId, queryClient, setNodes],
     );
 
     const applyGenerationTaskResult = useCallback(
         async (nodeId: string, task: GenerationTask) => {
-            const capturedScope = captureUserScope();
             const capturedCanvasId = projectId;
             const controller = consumerControllerRef.current;
-            const isCurrentCanvas = () => !controller.signal.aborted && userScopeMatches(capturedScope);
+            // 结果只属于 capturedCanvasId。编辑器已经切到别的画布时，
+            // 既不能写编辑器节点（会被自动保存落进另一张画布），也不能继续投影。
+            const ownership = captureCanvasGenerationOwnership({
+                canvasId: capturedCanvasId,
+                lifetime: canvasOwnerLifetime,
+                getLiveCanvasId: () => currentProjectIdRef.current,
+                signal: controller.signal,
+            });
+            const isCurrentCanvas = ownership.isCurrent;
             if (task.status !== "succeeded") {
                 if (generationTaskCanReloadResource(task) && isCurrentCanvas()) {
                     setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, resourceReloadAvailable: true } } : node)));
@@ -281,7 +305,7 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
                 throw error instanceof CanvasGenerationDurableAckError ? error : new CanvasGenerationDurableAckError(error);
             }
         },
-        [nodesRef, projectId, setNodes],
+        [canvasOwnerLifetime, nodesRef, projectId, setNodes],
     );
 
     const retrieveTaskResult = useCallback(async (task: GenerationTask) => {
