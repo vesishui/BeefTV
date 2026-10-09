@@ -1,0 +1,813 @@
+{
+  "apiVersion": "beeftv.plugin/v2",
+  "id": "shanhai-canvas",
+  "name": "山海画布",
+  "version": "1.0.0",
+  "author": "BeefTV Contributors",
+  "description": "山海画布（shanhai.vnshu.cn）协议：POST /api/v1/generations 创建异步任务，GET /api/v1/tasks/{id} 轮询，成片走 output.url（需同一枚 Bearer Key）。覆盖文本、图片、视频三类模型。",
+  "permissions": [
+    "generation.run",
+    "media.read"
+  ],
+  "configuration": {
+    "fields": [
+      {
+        "name": "apiKey",
+        "type": "secret",
+        "label": "API Key",
+        "required": true
+      }
+    ]
+  },
+  "contributes": {
+    "providers": [
+      {
+        "id": "shanhai-video",
+        "label": "山海画布视频",
+        "capabilities": [
+          "video"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://shanhai.vnshu.cn",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "山海模型调用 ID，取 GET /models 返回的 data[].id，例如 oc-model-qbdmeb。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "提示词，最长 20,000 字符。"
+          },
+          {
+            "name": "ratio",
+            "type": "string",
+            "required": false,
+            "mapping": "aspect_ratio",
+            "description": "画幅比例，取值以 GET /models 的 capabilities.aspect_ratios 为准。"
+          },
+          {
+            "name": "seconds",
+            "type": "integer",
+            "required": false,
+            "mapping": "duration",
+            "description": "视频时长（秒），映射到 options.duration，取值以模型 capabilities.durations 为准。"
+          },
+          {
+            "name": "resolution",
+            "type": "string",
+            "required": false,
+            "mapping": "resolution",
+            "description": "分辨率档位，例如 720p，取值以模型 capabilities.resolutions 为准。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "images",
+            "description": "参考图公网 HTTPS 直链数组，数量不超过 capabilities.max_reference_images。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "videos",
+            "description": "参考视频公网 HTTPS 直链数组。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "audios",
+            "description": "参考音频公网 HTTPS 直链数组；音频参考必须同时提供至少一张参考图或一段参考视频。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/api/v1/generations",
+          "contentType": "application/json",
+          "body": {
+            "$merge": [
+              {
+                "model": {
+                  "$ref": "request.model"
+                },
+                "prompt": {
+                  "$ref": "request.prompt"
+                },
+                "media_type": "video",
+                "inputs": {
+                  "$omitEmpty": {
+                    "$concatArrays": [
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.images"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "image",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.videos"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "video",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.audios"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "audio",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "options": {
+                  "$omitEmpty": {
+                    "aspect_ratio": {
+                      "$omitEmpty": {
+                        "$ref": "request.aspectRatio"
+                      }
+                    },
+                    "resolution": {
+                      "$omitEmpty": {
+                        "$ref": "request.resolution"
+                      }
+                    },
+                    "duration": {
+                      "$omitEmpty": {
+                        "$toString": {
+                          "$ref": "request.seconds"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "$coalesce": [
+                  {
+                    "$ref": "request.providerOptions.shanhai-canvas.body"
+                  },
+                  {}
+                ]
+              }
+            ]
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/api/v1/tasks/{{taskId}}"
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "response.task_id"
+              },
+              {
+                "$ref": "response.data.id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$switch": {
+              "cases": [
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "succeeded",
+                        "success",
+                        "completed",
+                        "done"
+                      ]
+                    ]
+                  },
+                  "then": "succeeded"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "failed",
+                        "failure",
+                        "error",
+                        "cancelled",
+                        "canceled"
+                      ]
+                    ]
+                  },
+                  "then": "failed"
+                }
+              ],
+              "default": "pending"
+            }
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.error"
+              },
+              {
+                "$ref": "response.message"
+              }
+            ]
+          },
+          "videos": {
+            "$coalesce": [
+              {
+                "$ref": "response.output.url"
+              },
+              {
+                "$ref": "response.video_url"
+              },
+              {
+                "$ref": "response.url"
+              },
+              {
+                "$ref": "response.data.url"
+              }
+            ]
+          },
+          "resultEphemeral": true,
+          "usage": {
+            "$ref": "response.usage"
+          },
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "messagePaths": [
+            "error.message",
+            "message",
+            "error"
+          ]
+        }
+      },
+      {
+        "id": "shanhai-image",
+        "label": "山海画布图片",
+        "capabilities": [
+          "image"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://shanhai.vnshu.cn",
+        "requiresPublicMediaUrls": true,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "山海模型调用 ID，例如 shanhai-nano-banana-pro。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "提示词，最长 20,000 字符。"
+          },
+          {
+            "name": "ratio",
+            "type": "string",
+            "required": false,
+            "mapping": "aspect_ratio",
+            "description": "画幅比例，取值以 GET /models 的 capabilities.aspect_ratios 为准。"
+          },
+          {
+            "name": "resolution",
+            "type": "string",
+            "required": false,
+            "mapping": "resolution",
+            "description": "图片分辨率档位，例如 1K / 2K / 4K。"
+          },
+          {
+            "name": "images",
+            "type": "media[]",
+            "required": false,
+            "mapping": "images",
+            "description": "参考图公网 HTTPS 直链数组。"
+          },
+          {
+            "name": "videos",
+            "type": "media[]",
+            "required": false,
+            "mapping": "videos",
+            "description": "参考视频公网 HTTPS 直链数组，仅部分模型支持。"
+          },
+          {
+            "name": "audios",
+            "type": "media[]",
+            "required": false,
+            "mapping": "audios",
+            "description": "参考音频公网 HTTPS 直链数组，仅部分模型支持。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/api/v1/generations",
+          "contentType": "application/json",
+          "body": {
+            "$merge": [
+              {
+                "model": {
+                  "$ref": "request.model"
+                },
+                "prompt": {
+                  "$ref": "request.prompt"
+                },
+                "media_type": "image",
+                "inputs": {
+                  "$omitEmpty": {
+                    "$concatArrays": [
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.images"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "image",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.videos"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "video",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "$map": {
+                          "from": {
+                            "$sortByOrder": {
+                              "$ref": "request.audios"
+                            }
+                          },
+                          "as": "media",
+                          "in": {
+                            "type": "audio",
+                            "url": {
+                              "$ref": "media.value"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "options": {
+                  "$omitEmpty": {
+                    "aspect_ratio": {
+                      "$omitEmpty": {
+                        "$ref": "request.aspectRatio"
+                      }
+                    },
+                    "resolution": {
+                      "$omitEmpty": {
+                        "$ref": "request.resolution"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "$coalesce": [
+                  {
+                    "$ref": "request.providerOptions.shanhai-canvas.body"
+                  },
+                  {}
+                ]
+              }
+            ]
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/api/v1/tasks/{{taskId}}"
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "response.task_id"
+              },
+              {
+                "$ref": "response.data.id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$switch": {
+              "cases": [
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "succeeded",
+                        "success",
+                        "completed",
+                        "done"
+                      ]
+                    ]
+                  },
+                  "then": "succeeded"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "failed",
+                        "failure",
+                        "error",
+                        "cancelled",
+                        "canceled"
+                      ]
+                    ]
+                  },
+                  "then": "failed"
+                }
+              ],
+              "default": "pending"
+            }
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.error"
+              },
+              {
+                "$ref": "response.message"
+              }
+            ]
+          },
+          "images": {
+            "$coalesce": [
+              {
+                "$ref": "response.output.url"
+              },
+              {
+                "$ref": "response.image_url"
+              },
+              {
+                "$ref": "response.url"
+              },
+              {
+                "$ref": "response.data.url"
+              }
+            ]
+          },
+          "resultEphemeral": true,
+          "usage": {
+            "$ref": "response.usage"
+          },
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "messagePaths": [
+            "error.message",
+            "message",
+            "error"
+          ]
+        }
+      },
+      {
+        "id": "shanhai-text",
+        "label": "山海画布文本",
+        "capabilities": [
+          "text"
+        ],
+        "scopes": [
+          "admin.system-channel",
+          "user.custom-channel",
+          "canvas",
+          "creation",
+          "agent"
+        ],
+        "baseUrl": "https://shanhai.vnshu.cn",
+        "requiresPublicMediaUrls": false,
+        "auth": {
+          "type": "bearer",
+          "field": "apiKey"
+        },
+        "parameters": [
+          {
+            "name": "model",
+            "type": "string",
+            "required": true,
+            "mapping": "model",
+            "description": "山海文本模型调用 ID，例如 shanhai-deepseek-v4-pro。"
+          },
+          {
+            "name": "prompt",
+            "type": "string",
+            "required": true,
+            "mapping": "prompt",
+            "description": "提示词，最长 20,000 字符。"
+          },
+          {
+            "name": "providerOptions",
+            "type": "object",
+            "required": false,
+            "mapping": "provider-specific fields",
+            "description": "山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。"
+          }
+        ],
+        "create": {
+          "method": "POST",
+          "path": "/api/v1/generations",
+          "contentType": "application/json",
+          "body": {
+            "$merge": [
+              {
+                "model": {
+                  "$ref": "request.model"
+                },
+                "prompt": {
+                  "$ref": "request.prompt"
+                },
+                "media_type": "text"
+              },
+              {
+                "$coalesce": [
+                  {
+                    "$ref": "request.providerOptions.shanhai-canvas.body"
+                  },
+                  {}
+                ]
+              }
+            ]
+          }
+        },
+        "poll": {
+          "method": "GET",
+          "path": "/api/v1/tasks/{{taskId}}"
+        },
+        "response": {
+          "taskId": {
+            "$coalesce": [
+              {
+                "$ref": "response.id"
+              },
+              {
+                "$ref": "response.task_id"
+              },
+              {
+                "$ref": "response.data.id"
+              },
+              {
+                "$ref": "taskId"
+              }
+            ]
+          },
+          "status": {
+            "$switch": {
+              "cases": [
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "succeeded",
+                        "success",
+                        "completed",
+                        "done"
+                      ]
+                    ]
+                  },
+                  "then": "succeeded"
+                },
+                {
+                  "when": {
+                    "$in": [
+                      {
+                        "$lower": {
+                          "$trim": {
+                            "$coalesce": [
+                              {
+                                "$ref": "response.status"
+                              },
+                              ""
+                            ]
+                          }
+                        }
+                      },
+                      [
+                        "failed",
+                        "failure",
+                        "error",
+                        "cancelled",
+                        "canceled"
+                      ]
+                    ]
+                  },
+                  "then": "failed"
+                }
+              ],
+              "default": "pending"
+            }
+          },
+          "message": {
+            "$coalesce": [
+              {
+                "$ref": "response.error.message"
+              },
+              {
+                "$ref": "response.error"
+              },
+              {
+                "$ref": "response.message"
+              }
+            ]
+          },
+          "text": {
+            "$coalesce": [
+              {
+                "$ref": "response.output.text"
+              },
+              {
+                "$ref": "response.text"
+              }
+            ]
+          },
+          "usage": {
+            "$ref": "response.usage"
+          },
+          "errorPaths": [
+            "error.code",
+            "code"
+          ],
+          "messagePaths": [
+            "error.message",
+            "message",
+            "error"
+          ]
+        }
+      }
+    ]
+  },
+  "documentation": "# 山海画布\n\n山海画布（shanhai.vnshu.cn）的生成协议插件。山海不是 [OI] 兼容形状：它用 `POST /generations` 创建异步任务，用 `GET /tasks/{id}` 轮询，`media_type` 区分文本、图片和视频。\n\n## 协议身份\n\n- 插件 ID：`shanhai-canvas`\n- Provider ID：`shanhai-video`、`shanhai-image`、`shanhai-text`\n- 能力：`video`、`image`、`text`\n- 默认 Base URL：`https://shanhai.vnshu.cn`\n- 鉴权：Bearer（`Authorization: Bearer oc_live_...`）\n\n## 接口\n\n| 阶段 | 方法与路径 |\n| --- | --- |\n| 创建任务 | `POST /api/v1/generations` |\n| 查询任务 | `GET /api/v1/tasks/{taskId}` |\n| 下载成片 | `output.url` 原样返回的地址（`/api/v1/media/runs/{id}`） |\n\n创建返回任务 `id`；查询在 `status` 为 `succeeded` 后从 `output.url` 取结果，`queued` / `running` 表示仍在排队或生成中。`output.url` 是受鉴权地址，下载时必须带同一枚 Bearer Key，因此结果标记为 `resultEphemeral`。文本模型通常在创建时直接返回 `succeeded` 和 `output.text`。\n\n## 请求体\n\n```json\n{\n  \"model\": \"oc-model-qbdmeb\",\n  \"prompt\": \"A cinematic mountain sunrise\",\n  \"media_type\": \"video\",\n  \"inputs\": [{ \"type\": \"image\", \"url\": \"https://cdn.example.com/reference-1.jpg\" }],\n  \"options\": { \"aspect_ratio\": \"16:9\", \"resolution\": \"720p\", \"duration\": \"15\" }\n}\n```\n\n`options.duration` 是字符串。`inputs` 里每一项必须是公开可访问的 HTTPS 直链，数量不能超过 `GET /models` 返回的 `capabilities.max_reference_images`。\n\n## 参数\n\n| 统一字段 | 上游字段 | 说明 |\n| --- | --- | --- |\n| `model` | `model` | `GET /models` 返回的 `data[].id`，不要用显示名称。 |\n| `prompt` | `prompt` | 提示词，最长 20,000 字符。 |\n| `ratio` | `options.aspect_ratio` | 画幅比例，取值以模型 `capabilities.aspect_ratios` 为准。 |\n| `seconds` | `options.duration` | 视频时长秒数，按模型 `capabilities.durations` 取值。 |\n| `resolution` | `options.resolution` | 分辨率档位，视频如 720p，图片如 1K / 2K / 4K。 |\n| `images` | `inputs[type=image]` | 参考图公网 HTTPS 直链数组。 |\n| `videos` | `inputs[type=video]` | 参考视频公网 HTTPS 直链数组。 |\n| `audios` | `inputs[type=audio]` | 参考音频公网 HTTPS 直链数组。 |\n\n山海的扩展字段可通过 `providerOptions.shanhai-canvas.body` 传入。\n\n## 素材要求\n\n山海要求参考素材是公网可访问的 HTTPS 直链，因此图片、视频两个 provider 声明 `requiresPublicMediaUrls`，由素材图床在上游请求之前完成上传替换；不接受本地路径、登录后页面、HTML 预览页或仅浏览器能访问的地址。素材必须在任务处理期间保持有效。\n\n音频参考需要先用 `POST /uploads/audio`（`multipart/form-data`，文件字段名固定为 `file`，支持 MP3 / WAV，最大 25MB）取得 HTTPS 地址；本插件不代为上传音频，请先自行上传再把地址填入 `audios`。音频参考还必须同时提供至少一张参考图或一段参考视频。\n\n## 错误语义\n\n| 状态码 | 含义 |\n| --- | --- |\n| 401 | Key 缺失、错误或已撤销。 |\n| 403 | Key 没有对应权限。 |\n| 422 | 参数、模型或输入地址不合法。 |\n| 429 | 超过该 Key 的每分钟限流。 |\n\n---\n\n# 山海画布接口字段\n\n## 协议身份\n\n- 插件 ID：`shanhai-canvas`。\n- Provider ID：`shanhai-video`、`shanhai-image`、`shanhai-text`。\n- 能力：`video`、`image`、`text`。\n- 默认 Base URL：`https://shanhai.vnshu.cn`。\n- 鉴权驱动：`bearer`。\n- 创建：`POST /api/v1/generations`。\n- 查询：`GET /api/v1/tasks/{taskId}`。\n- 生命周期：异步任务 + 轮询；文本模型通常同步返回。\n\n## 配置字段\n\n| 字段 | 类型 | 必填 | 含义 |\n| --- | --- | --- | --- |\n| `apiKey` | secret | 是 | 画布账户在「API 接入」创建的 Key（`oc_live_...`） |\n\n## 统一字段映射\n\n| 统一字段 | 类型 | 必填 | 上游映射 | 说明 |\n| --- | --- | --- | --- | --- |\n| `model` | string | 是 | `model` | `GET /models` 的 `data[].id`。 |\n| `prompt` | string | 是 | `prompt` | 提示词。 |\n| `ratio` | string | 否 | `options.aspect_ratio` | 画幅比例。 |\n| `seconds` | integer | 否 | `options.duration` | 视频时长，写为字符串。 |\n| `resolution` | string | 否 | `options.resolution` | 分辨率档位。 |\n| `images` | media[] | 否 | `inputs[type=image]` | 参考图公网直链。 |\n| `videos` | media[] | 否 | `inputs[type=video]` | 参考视频公网直链。 |\n| `audios` | media[] | 否 | `inputs[type=audio]` | 参考音频公网直链。 |\n| `providerOptions` | object | 否 | `providerOptions.shanhai-canvas.body` | 扩展字段合并进请求体。 |\n\n## 上游请求模板\n\n| 上游位置 | 值或转换表达式 |\n| --- | --- |\n| `create.method` | `\"POST\"` |\n| `create.path` | `\"/api/v1/generations\"` |\n| `create.contentType` | `\"application/json\"` |\n| `create.body.model` | `request.model` |\n| `create.body.prompt` | `request.prompt` |\n| `create.body.media_type` | 按 provider 固定为 `\"text\"` / `\"image\"` / `\"video\"` |\n| `create.body.inputs` | `request.images`、`request.videos`、`request.audios` 按序合并为 `{type,url}`，为空时整体省略 |\n| `create.body.options.aspect_ratio` | `request.aspectRatio`，为空时省略 |\n| `create.body.options.resolution` | `request.resolution`，为空时省略 |\n| `create.body.options.duration` | `request.seconds` 转字符串，为空时省略（仅视频） |\n\n## 响应映射\n\n| 输出 | 取值 |\n| --- | --- |\n| `taskId` | `id` / `task_id` / `data.id` |\n| `status` | `succeeded`、`success`、`completed`、`done` 归一为成功；`failed`、`failure`、`error`、`cancelled` 归一为失败；`queued`、`running` 及其余为进行中 |\n| `message` | `error.message` / `error` / `message` |\n| `videos` | `output.url` / `video_url` / `url` / `data.url`（视频 provider） |\n| `images` | `output.url` / `image_url` / `url` / `data.url`（图片 provider） |\n| `text` | `output.text` / `text`（文本 provider） |\n| `usage` | `usage` |\n| `errorPaths` | `error.code`、`code` |\n| `messagePaths` | `error.message`、`message`、`error` |\n| `resultEphemeral` | 图片、视频 provider 为 `true`（`output.url` 需带同一枚 Bearer Key 下载） |\n\n## 素材要求\n\n参考素材必须是公网可访问的 HTTPS 直链。图片和视频 provider 声明 `requiresPublicMediaUrls`，由 BeefTV 图床在上游请求之前完成上传替换。\n\n音频参考需要先调用 `POST /api/v1/uploads/audio`（`multipart/form-data`，字段名固定为 `file`，支持 MP3 / WAV，最大 25MB）取得 HTTPS 地址；本插件不代为上传音频。音频参考还必须同时提供至少一张参考图或一段参考视频。\n\n## 错误语义\n\n| 状态码 | 含义 |\n| --- | --- |\n| 401 | Key 缺失、错误或已撤销。 |\n| 403 | Key 没有对应权限。 |\n| 422 | 参数、模型或输入地址不合法。 |\n| 429 | 超过该 Key 的每分钟限流。 |\n\n<!-- BEEFTV_PLUGIN_MANIFEST_START -->\n## Manifest 完整接口定义\n\n以下 JSON 与插件包内实际 `manifest.json` 逐字段一致，覆盖插件身份、权限、配置、鉴权、参数、校验、创建、Agent、查询、取消、结果下载、响应和 Agent 响应映射。`documentation` 字段的值就是当前完整文档；为避免文档在自身内部无限递归，JSON 中仅用等义占位文本表示正文。\n\n```json\n{\n  \"apiVersion\": \"beeftv.plugin/v2\",\n  \"id\": \"shanhai-canvas\",\n  \"name\": \"山海画布\",\n  \"version\": \"1.0.0\",\n  \"author\": \"BeefTV Contributors\",\n  \"description\": \"山海画布（shanhai.vnshu.cn）协议：POST /api/v1/generations 创建异步任务，GET /api/v1/tasks/{id} 轮询，成片走 output.url（需同一枚 Bearer Key）。覆盖文本、图片、视频三类模型。\",\n  \"permissions\": [\n    \"generation.run\",\n    \"media.read\"\n  ],\n  \"configuration\": {\n    \"fields\": [\n      {\n        \"name\": \"apiKey\",\n        \"type\": \"secret\",\n        \"label\": \"API Key\",\n        \"required\": true\n      }\n    ]\n  },\n  \"contributes\": {\n    \"providers\": [\n      {\n        \"id\": \"shanhai-video\",\n        \"label\": \"山海画布视频\",\n        \"capabilities\": [\n          \"video\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://shanhai.vnshu.cn\",\n        \"requiresPublicMediaUrls\": true,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"山海模型调用 ID，取 GET /models 返回的 data[].id，例如 oc-model-qbdmeb。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"提示词，最长 20,000 字符。\"\n          },\n          {\n            \"name\": \"ratio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"aspect_ratio\",\n            \"description\": \"画幅比例，取值以 GET /models 的 capabilities.aspect_ratios 为准。\"\n          },\n          {\n            \"name\": \"seconds\",\n            \"type\": \"integer\",\n            \"required\": false,\n            \"mapping\": \"duration\",\n            \"description\": \"视频时长（秒），映射到 options.duration，取值以模型 capabilities.durations 为准。\"\n          },\n          {\n            \"name\": \"resolution\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"resolution\",\n            \"description\": \"分辨率档位，例如 720p，取值以模型 capabilities.resolutions 为准。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"images\",\n            \"description\": \"参考图公网 HTTPS 直链数组，数量不超过 capabilities.max_reference_images。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"videos\",\n            \"description\": \"参考视频公网 HTTPS 直链数组。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"audios\",\n            \"description\": \"参考音频公网 HTTPS 直链数组；音频参考必须同时提供至少一张参考图或一段参考视频。\"\n          },\n          {\n            \"name\": \"providerOptions\",\n            \"type\": \"object\",\n            \"required\": false,\n            \"mapping\": \"provider-specific fields\",\n            \"description\": \"山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/api/v1/generations\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"$merge\": [\n              {\n                \"model\": {\n                  \"$ref\": \"request.model\"\n                },\n                \"prompt\": {\n                  \"$ref\": \"request.prompt\"\n                },\n                \"media_type\": \"video\",\n                \"inputs\": {\n                  \"$omitEmpty\": {\n                    \"$concatArrays\": [\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.images\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"image\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      },\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.videos\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"video\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      },\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.audios\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"audio\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      }\n                    ]\n                  }\n                },\n                \"options\": {\n                  \"$omitEmpty\": {\n                    \"aspect_ratio\": {\n                      \"$omitEmpty\": {\n                        \"$ref\": \"request.aspectRatio\"\n                      }\n                    },\n                    \"resolution\": {\n                      \"$omitEmpty\": {\n                        \"$ref\": \"request.resolution\"\n                      }\n                    },\n                    \"duration\": {\n                      \"$omitEmpty\": {\n                        \"$toString\": {\n                          \"$ref\": \"request.seconds\"\n                        }\n                      }\n                    }\n                  }\n                }\n              },\n              {\n                \"$coalesce\": [\n                  {\n                    \"$ref\": \"request.providerOptions.shanhai-canvas.body\"\n                  },\n                  {}\n                ]\n              }\n            ]\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/api/v1/tasks/{{taskId}}\"\n        },\n        \"response\": {\n          \"taskId\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.id\"\n              },\n              {\n                \"$ref\": \"response.task_id\"\n              },\n              {\n                \"$ref\": \"response.data.id\"\n              },\n              {\n                \"$ref\": \"taskId\"\n              }\n            ]\n          },\n          \"status\": {\n            \"$switch\": {\n              \"cases\": [\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"succeeded\",\n                        \"success\",\n                        \"completed\",\n                        \"done\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"succeeded\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"failed\",\n                        \"failure\",\n                        \"error\",\n                        \"cancelled\",\n                        \"canceled\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"failed\"\n                }\n              ],\n              \"default\": \"pending\"\n            }\n          },\n          \"message\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.error.message\"\n              },\n              {\n                \"$ref\": \"response.error\"\n              },\n              {\n                \"$ref\": \"response.message\"\n              }\n            ]\n          },\n          \"videos\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.output.url\"\n              },\n              {\n                \"$ref\": \"response.video_url\"\n              },\n              {\n                \"$ref\": \"response.url\"\n              },\n              {\n                \"$ref\": \"response.data.url\"\n              }\n            ]\n          },\n          \"resultEphemeral\": true,\n          \"usage\": {\n            \"$ref\": \"response.usage\"\n          },\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"message\",\n            \"error\"\n          ]\n        }\n      },\n      {\n        \"id\": \"shanhai-image\",\n        \"label\": \"山海画布图片\",\n        \"capabilities\": [\n          \"image\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://shanhai.vnshu.cn\",\n        \"requiresPublicMediaUrls\": true,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"山海模型调用 ID，例如 shanhai-nano-banana-pro。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"提示词，最长 20,000 字符。\"\n          },\n          {\n            \"name\": \"ratio\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"aspect_ratio\",\n            \"description\": \"画幅比例，取值以 GET /models 的 capabilities.aspect_ratios 为准。\"\n          },\n          {\n            \"name\": \"resolution\",\n            \"type\": \"string\",\n            \"required\": false,\n            \"mapping\": \"resolution\",\n            \"description\": \"图片分辨率档位，例如 1K / 2K / 4K。\"\n          },\n          {\n            \"name\": \"images\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"images\",\n            \"description\": \"参考图公网 HTTPS 直链数组。\"\n          },\n          {\n            \"name\": \"videos\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"videos\",\n            \"description\": \"参考视频公网 HTTPS 直链数组，仅部分模型支持。\"\n          },\n          {\n            \"name\": \"audios\",\n            \"type\": \"media[]\",\n            \"required\": false,\n            \"mapping\": \"audios\",\n            \"description\": \"参考音频公网 HTTPS 直链数组，仅部分模型支持。\"\n          },\n          {\n            \"name\": \"providerOptions\",\n            \"type\": \"object\",\n            \"required\": false,\n            \"mapping\": \"provider-specific fields\",\n            \"description\": \"山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/api/v1/generations\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"$merge\": [\n              {\n                \"model\": {\n                  \"$ref\": \"request.model\"\n                },\n                \"prompt\": {\n                  \"$ref\": \"request.prompt\"\n                },\n                \"media_type\": \"image\",\n                \"inputs\": {\n                  \"$omitEmpty\": {\n                    \"$concatArrays\": [\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.images\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"image\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      },\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.videos\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"video\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      },\n                      {\n                        \"$map\": {\n                          \"from\": {\n                            \"$sortByOrder\": {\n                              \"$ref\": \"request.audios\"\n                            }\n                          },\n                          \"as\": \"media\",\n                          \"in\": {\n                            \"type\": \"audio\",\n                            \"url\": {\n                              \"$ref\": \"media.value\"\n                            }\n                          }\n                        }\n                      }\n                    ]\n                  }\n                },\n                \"options\": {\n                  \"$omitEmpty\": {\n                    \"aspect_ratio\": {\n                      \"$omitEmpty\": {\n                        \"$ref\": \"request.aspectRatio\"\n                      }\n                    },\n                    \"resolution\": {\n                      \"$omitEmpty\": {\n                        \"$ref\": \"request.resolution\"\n                      }\n                    }\n                  }\n                }\n              },\n              {\n                \"$coalesce\": [\n                  {\n                    \"$ref\": \"request.providerOptions.shanhai-canvas.body\"\n                  },\n                  {}\n                ]\n              }\n            ]\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/api/v1/tasks/{{taskId}}\"\n        },\n        \"response\": {\n          \"taskId\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.id\"\n              },\n              {\n                \"$ref\": \"response.task_id\"\n              },\n              {\n                \"$ref\": \"response.data.id\"\n              },\n              {\n                \"$ref\": \"taskId\"\n              }\n            ]\n          },\n          \"status\": {\n            \"$switch\": {\n              \"cases\": [\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"succeeded\",\n                        \"success\",\n                        \"completed\",\n                        \"done\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"succeeded\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"failed\",\n                        \"failure\",\n                        \"error\",\n                        \"cancelled\",\n                        \"canceled\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"failed\"\n                }\n              ],\n              \"default\": \"pending\"\n            }\n          },\n          \"message\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.error.message\"\n              },\n              {\n                \"$ref\": \"response.error\"\n              },\n              {\n                \"$ref\": \"response.message\"\n              }\n            ]\n          },\n          \"images\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.output.url\"\n              },\n              {\n                \"$ref\": \"response.image_url\"\n              },\n              {\n                \"$ref\": \"response.url\"\n              },\n              {\n                \"$ref\": \"response.data.url\"\n              }\n            ]\n          },\n          \"resultEphemeral\": true,\n          \"usage\": {\n            \"$ref\": \"response.usage\"\n          },\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"message\",\n            \"error\"\n          ]\n        }\n      },\n      {\n        \"id\": \"shanhai-text\",\n        \"label\": \"山海画布文本\",\n        \"capabilities\": [\n          \"text\"\n        ],\n        \"scopes\": [\n          \"admin.system-channel\",\n          \"user.custom-channel\",\n          \"canvas\",\n          \"creation\",\n          \"agent\"\n        ],\n        \"baseUrl\": \"https://shanhai.vnshu.cn\",\n        \"requiresPublicMediaUrls\": false,\n        \"auth\": {\n          \"type\": \"bearer\",\n          \"field\": \"apiKey\"\n        },\n        \"parameters\": [\n          {\n            \"name\": \"model\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"model\",\n            \"description\": \"山海文本模型调用 ID，例如 shanhai-deepseek-v4-pro。\"\n          },\n          {\n            \"name\": \"prompt\",\n            \"type\": \"string\",\n            \"required\": true,\n            \"mapping\": \"prompt\",\n            \"description\": \"提示词，最长 20,000 字符。\"\n          },\n          {\n            \"name\": \"providerOptions\",\n            \"type\": \"object\",\n            \"required\": false,\n            \"mapping\": \"provider-specific fields\",\n            \"description\": \"山海尚未固定的扩展字段，可通过 providerOptions.shanhai-canvas.body 传入。\"\n          }\n        ],\n        \"create\": {\n          \"method\": \"POST\",\n          \"path\": \"/api/v1/generations\",\n          \"contentType\": \"application/json\",\n          \"body\": {\n            \"$merge\": [\n              {\n                \"model\": {\n                  \"$ref\": \"request.model\"\n                },\n                \"prompt\": {\n                  \"$ref\": \"request.prompt\"\n                },\n                \"media_type\": \"text\"\n              },\n              {\n                \"$coalesce\": [\n                  {\n                    \"$ref\": \"request.providerOptions.shanhai-canvas.body\"\n                  },\n                  {}\n                ]\n              }\n            ]\n          }\n        },\n        \"poll\": {\n          \"method\": \"GET\",\n          \"path\": \"/api/v1/tasks/{{taskId}}\"\n        },\n        \"response\": {\n          \"taskId\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.id\"\n              },\n              {\n                \"$ref\": \"response.task_id\"\n              },\n              {\n                \"$ref\": \"response.data.id\"\n              },\n              {\n                \"$ref\": \"taskId\"\n              }\n            ]\n          },\n          \"status\": {\n            \"$switch\": {\n              \"cases\": [\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"succeeded\",\n                        \"success\",\n                        \"completed\",\n                        \"done\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"succeeded\"\n                },\n                {\n                  \"when\": {\n                    \"$in\": [\n                      {\n                        \"$lower\": {\n                          \"$trim\": {\n                            \"$coalesce\": [\n                              {\n                                \"$ref\": \"response.status\"\n                              },\n                              \"\"\n                            ]\n                          }\n                        }\n                      },\n                      [\n                        \"failed\",\n                        \"failure\",\n                        \"error\",\n                        \"cancelled\",\n                        \"canceled\"\n                      ]\n                    ]\n                  },\n                  \"then\": \"failed\"\n                }\n              ],\n              \"default\": \"pending\"\n            }\n          },\n          \"message\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.error.message\"\n              },\n              {\n                \"$ref\": \"response.error\"\n              },\n              {\n                \"$ref\": \"response.message\"\n              }\n            ]\n          },\n          \"text\": {\n            \"$coalesce\": [\n              {\n                \"$ref\": \"response.output.text\"\n              },\n              {\n                \"$ref\": \"response.text\"\n              }\n            ]\n          },\n          \"usage\": {\n            \"$ref\": \"response.usage\"\n          },\n          \"errorPaths\": [\n            \"error.code\",\n            \"code\"\n          ],\n          \"messagePaths\": [\n            \"error.message\",\n            \"message\",\n            \"error\"\n          ]\n        }\n      }\n    ]\n  },\n  \"documentation\": \"<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>\"\n}\n```\n<!-- BEEFTV_PLUGIN_MANIFEST_END -->\n"
+}
