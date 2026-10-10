@@ -40,6 +40,8 @@ export type DesktopRuntimeBinding = {
     InstallUpdate?: () => Promise<void>;
     ConfirmUpdateStartup?: () => Promise<void>;
     OpenBeefTVX?: () => Promise<void>;
+    OpenBeefTVWebsite?: () => Promise<void>;
+    OpenBeefTVGitHub?: () => Promise<void>;
 };
 
 declare global {
