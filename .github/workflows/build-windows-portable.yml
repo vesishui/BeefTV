@@ -1,0 +1,89 @@
+name: Build Windows portable
+
+# 只做一件事：把 Windows 版打出来供本地取用。
+# 不创建 release、不推更新源、不依赖任何密钥，与官方 release-desktop.yml 无关。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - media-hosting
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  windows-amd64:
+    name: Build windows-amd64
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+
+      - name: Select bundled Node runtime
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs"),p=require("path"); const bin=p.dirname(process.execPath); fs.appendFileSync(process.env.GITHUB_ENV, `BEEFTV_NODE_RUNTIME=${process.platform==="win32"?bin:p.dirname(bin)}\n`);'
+
+      - name: Verify agent host packaging contract
+        shell: bash
+        run: bun test scripts/package-agent-host.test.mjs
+
+      - name: Install MSYS2 UCRT64 GCC
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          release: true
+          path-type: inherit
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
+
+      - name: Assert DWARF 5 CGO compiler
+        env:
+          MSYSTEM_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\ucrt64
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\assert-windows-dwarf5-cgo.ps1
+
+      - name: Build Windows desktop
+        env:
+          CGO_ENABLED: "1"
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION).Trim()
+          $bin = "backend\cmd\desktop\build\bin"
+          if (-not (Test-Path -LiteralPath (Join-Path $bin "BeefTV.exe"))) {
+            throw "BeefTV.exe was not produced under $bin"
+          }
+          $zip = "BeefTV-$version-windows-amd64-portable.zip"
+          Compress-Archive -Path (Join-Path $bin "*") -DestinationPath $zip -Force
+          Write-Host "Packaged $zip"
+          Get-ChildItem -LiteralPath $bin | Select-Object Name, Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BeefTV-windows-amd64-portable
+          path: BeefTV-*-windows-amd64-portable.zip
+          if-no-files-found: error
+          retention-days: 14
