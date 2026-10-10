@@ -61,6 +61,16 @@ jobs:
         shell: pwsh
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\assert-windows-dwarf5-cgo.ps1
 
+      - name: Clear stale plugin archives
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # 仓库里只有 3 个插件 zip 被强制跟踪，其余 88 个被 .gitignore 排除。
+          # 构建脚本只在 zip 数为 0 时才重建，一旦数量对不上就直接 throw，
+          # 所以先清掉这几个，让它按源码目录把 91 个全部重新打包。
+          Get-ChildItem -LiteralPath plugin-packages -File -Filter *.beeftv-plugin | Remove-Item -Force
+          Write-Host "Cleared stale plugin archives so the build repackages every source directory."
+
       - name: Build Windows desktop
         env:
           CGO_ENABLED: "1"
